@@ -1,14 +1,17 @@
 import { Injectable } from '@nestjs/common';
 import { AppConfigService } from '@app/core';
 import type { IGetFareRateByCategoryResult } from '@db/queries/rides/vehicle_fare_rates.queries.js';
-import type { FareBreakdown } from '../rides/types/ride.types.js';
+import type { FareBreakdown } from '../types/ride.types.js';
 
 @Injectable()
 export class FareCalculatorService {
   constructor(private readonly config: AppConfigService) {}
 
   calculate(
-    rate: IGetFareRateByCategoryResult,
+    rate: Pick<
+      IGetFareRateByCategoryResult,
+      'base_fare_inr' | 'per_km_rate_inr' | 'min_fare_inr'
+    >,
     distanceKm: number,
   ): FareBreakdown {
     const base = Number(rate.base_fare_inr);
@@ -27,7 +30,10 @@ export class FareCalculatorService {
     };
   }
 
-  splitPartialPayment(totalFare: number): { advance: number; remainder: number } {
+  splitPartialPayment(totalFare: number): {
+    advance: number;
+    remainder: number;
+  } {
     const percent = this.config.booking.partialAdvancePercent;
     const advance = Math.round(((totalFare * percent) / 100) * 100) / 100;
     const remainder = Math.round((totalFare - advance) * 100) / 100;

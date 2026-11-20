@@ -14,6 +14,18 @@ import {
 
 @Injectable()
 export class ImageRepository extends BaseRepository {
+  async markPrivate(id: string, client: PoolClient) {
+    await client.query('UPDATE images SET document_private=TRUE WHERE id=$1', [
+      id,
+    ]);
+  }
+  async isPrivate(id: string) {
+    const result = await this.pool.query<{ document_private: boolean }>(
+      'SELECT document_private FROM images WHERE id=$1',
+      [id],
+    );
+    return result.rows[0]?.document_private === true;
+  }
   async findByFileId(fileId: string, client: PoolClient) {
     const result = await client.query<
       NonNullable<Awaited<ReturnType<ImageRepository['findById']>>>

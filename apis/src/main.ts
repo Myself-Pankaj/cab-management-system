@@ -1,5 +1,7 @@
+import { summarizeLogValue } from '@app/core/logger/log-sanitizer.js';
 import { writeFile } from 'node:fs/promises';
 import { ValidationPipe } from '@nestjs/common';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module.js';
@@ -7,101 +9,138 @@ import cookieParser from 'cookie-parser';
 import { AppLogger } from '@app/core/logger/logger.service.js';
 import { AppConfigService } from '@app/core/config/config.service.js';
 import { GlobalExceptionFilter } from '@app/core/filter/global.filter.js';
+import { requestLoggingMiddleware } from '@app/core/logger/request-context.js';
 import { ResponseInterceptor } from '@app/core/interceptor/response.interceptor.js';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { rawBody: true });
-  app.enableShutdownHooks();
-
-  // Logger
-  const logger = app.get(AppLogger);
-  logger.forContext('Bootstrap');
-  app.useLogger(logger);
-
-  const globalPrefix = 'api/v1';
-  app.setGlobalPrefix(globalPrefix);
-  app.use(cookieParser());
-
-  const configService = app.get(AppConfigService);
-  app.enableCors({
-    credentials: true,
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    origin: (
-      origin: string | undefined,
-      callback: (err: Error | null, allow?: boolean) => void,
-    ) => {
-      if (!origin) {
-        callback(null, true);
-        return;
-      }
-      if (configService.appConfig.allowedOrigin.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error('Not allowed by CORS'));
-      }
-    },
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    rawBody: true,
+    bufferLogs: true,
   });
+  try {
+    app.enableShutdownHooks();
 
-  const exportIndex = process.argv.indexOf('--export-openapi');
-  if (!configService.isProduction || exportIndex !== -1) {
-    const swaggerPath = 'swagger';
-    const swaggerConfig = new DocumentBuilder()
-      .setTitle('Cab Management API')
-      .setDescription('Cab management system API')
-      .setVersion('1.0')
-      .addCookieAuth('access_token')
-      .addCookieAuth('refresh_token')
-      .addBearerAuth()
-      .build();
-    const document = SwaggerModule.createDocument(app, swaggerConfig);
-    if (exportIndex !== -1) {
-      const output = process.argv[exportIndex + 1];
-      if (!output) throw new Error('--export-openapi requires an output path');
-      await writeFile(output, JSON.stringify(document, null, 2) + '\n');
-      await app.close();
-      return;
-    }
-    SwaggerModule.setup(swaggerPath, app, document, {
-      useGlobalPrefix: true,
-      jsonDocumentUrl: 'swagger-json',
+    // Logger
+    const logger = app.get(AppLogger).forContext('Bootstrap');
+    app.useLogger(logger);
+    app.use(requestLoggingMiddleware(logger));
+
+    const globalPrefix = 'api/v1';
+    app.setGlobalPrefix(globalPrefix);
+    app.use(cookieParser());
+
+    const configService = app.get(AppConfigService);
+    app.useBodyParser('json', { limit: '15mb' });
+    app.enableCors({
+      credentials: true,
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id'],
+      exposedHeaders: ['X-Request-Id'],
+      origin: (
+        origin: string | undefined,
+        callback: (err: Error | null, allow?: boolean) => void,
+      ) => {
+        if (!origin) {
+          callback(null, true);
+          return;
+        }
+        if (configService.appConfig.allowedOrigin.includes(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error('Not allowed by CORS'));
+        }
+      },
     });
 
-    const httpAdapter = app.getHttpAdapter();
-    httpAdapter.get(
-      `/${swaggerPath}`,
-      (_req: unknown, res: { redirect: (url: string) => void }) => {
-        res.redirect(`/${globalPrefix}/${swaggerPath}`);
-      },
+    const exportIndex = process.argv.indexOf('--export-openapi');
+    if (!configService.isProduction || exportIndex !== -1) {
+      const swaggerPath = 'swagger';
+      const swaggerConfig = new DocumentBuilder()
+        .setTitle('Cab Management API')
+        .setDescription('Cab management system API')
+        .setVersion('1.0')
+        .addCookieAuth('access_token')
+        .addCookieAuth('refresh_token')
+        .addBearerAuth()
+        .build();
+      const document = SwaggerModule.createDocument(app, swaggerConfig);
+      if (exportIndex !== -1) {
+        const output = process.argv[exportIndex + 1];
+        if (!output)
+          throw new Error('--export-openapi requires an output path');
+        await writeFile(output, JSON.stringify(document, null, 2) + '\n');
+        await app.close();
+        return;
+      }
+      SwaggerModule.setup(swaggerPath, app, document, {
+        useGlobalPrefix: true,
+        jsonDocumentUrl: 'swagger-json',
+      });
+
+      const httpAdapter = app.getHttpAdapter();
+      httpAdapter
+        .getInstance()
+        .get(
+          `/${swaggerPath}`,
+          (_req: unknown, res: { redirect: (url: string) => void }) => {
+            res.redirect(`/${globalPrefix}/${swaggerPath}`);
+          },
+        );
+    }
+
+    // Global Pipes
+    app.useGlobalPipes(
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+        transformOptions: {
+          enableImplicitConversion: true,
+        },
+      }),
     );
-  }
 
-  // Global Pipes
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-      transformOptions: {
-        enableImplicitConversion: true,
-      },
-    }),
-  );
+    // Global filters and interceptors
+    app.useGlobalFilters(new GlobalExceptionFilter(logger, configService));
+    app.useGlobalInterceptors(new ResponseInterceptor(configService, logger));
+    const port = configService.appConfig.port;
+    const host = configService.appConfig.host;
+    await app.listen(port, host);
 
-  // Global filters and interceptors
-  app.useGlobalFilters(new GlobalExceptionFilter(logger, configService));
-  app.useGlobalInterceptors(new ResponseInterceptor(configService, logger));
-  const port = configService.appConfig.port;
-  const host = configService.appConfig.host;
-  await app.listen(port, host);
-
-  logger.log(
-    `✓ Application is running on: http://localhost:${port}/${globalPrefix}`,
-  );
-  if (!configService.isProduction) {
     logger.log(
-      `✓ Swagger docs: http://localhost:${port}/${globalPrefix}/swagger`,
+      `✓ Application is running on: http://localhost:${port}/${globalPrefix}`,
     );
+    if (!configService.isProduction) {
+      logger.log(
+        `✓ Swagger docs: http://localhost:${port}/${globalPrefix}/swagger`,
+      );
+    }
+  } catch (error) {
+    try {
+      await app.close();
+    } catch (cleanupError) {
+      process.stderr.write(
+        JSON.stringify({
+          level: 'error',
+          context: 'Bootstrap',
+          message: 'Startup cleanup failed',
+          error: summarizeLogValue(cleanupError),
+        }) + '\n',
+      );
+    }
+    throw error;
   }
 }
 
-void bootstrap();
+void bootstrap().catch((error: unknown) => {
+  // Also covers failures before the dependency-injected logger is available.
+  const details = summarizeLogValue(error);
+  process.stderr.write(
+    JSON.stringify({
+      level: 'error',
+      context: 'Bootstrap',
+      message: 'Application startup failed',
+      error: details,
+    }) + '\n',
+  );
+  process.exitCode = 1;
+});

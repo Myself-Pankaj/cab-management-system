@@ -15,7 +15,9 @@ export class PassengerValidationService {
 
     const primaryCount = passengers.filter((p) => p.is_primary).length;
     if (primaryCount !== 1) {
-      throw RideErrors.invalidPassengers('Exactly one primary passenger is required');
+      throw RideErrors.invalidPassengers(
+        'Exactly one primary passenger is required',
+      );
     }
 
     const limit = VEHICLE_CATEGORY_SEAT_LIMITS[vehicleCategory];
@@ -25,7 +27,9 @@ export class PassengerValidationService {
 
     for (const passenger of passengers) {
       if (!passenger.name?.trim() || !passenger.phone?.trim()) {
-        throw RideErrors.invalidPassengers('Each passenger requires name and phone');
+        throw RideErrors.invalidPassengers(
+          'Each passenger requires name and phone',
+        );
       }
     }
   }
@@ -36,7 +40,7 @@ export class PassengerValidationService {
     returnAt?: string,
   ) {
     const pickup = new Date(pickupAt);
-    if (Number.isNaN(pickup.getTime())) {
+    if (Number.isNaN(pickup.getTime()) || pickup.getTime() <= Date.now()) {
       throw RideErrors.invalidTripDates();
     }
 

@@ -1,7 +1,11 @@
+import type { Response } from 'express';
+import { UploadVehiclePhotoDto } from '@app/resources/media/dto/upload-vehicle-photo.dto.js';
+import { UploadDocumentDto } from '@app/resources/media/dto/upload-document.dto.js';
 import { ApiEnvelope } from '../openapi/api-envelope.decorator.js';
 import {
   UploadAuthResponseDto,
   ImageDataDto,
+  DocumentUploadDataDto,
   ImagesDataDto,
   MessageResponseDto,
 } from '../openapi/response.dto.js';
@@ -13,13 +17,17 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseUUIDPipe,
+  ParseIntPipe,
   Post,
   Query,
+  Res,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiCookieAuth,
   ApiOperation,
+  ApiResponse,
   ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
@@ -34,6 +42,59 @@ import type { image_owner_type } from '@db/queries/media/images.queries.js';
 @Controller('media')
 export class MediaController {
   constructor(private readonly mediaService: MediaService) {}
+
+  @Post('vehicles/:vehicleId/photos')
+  @ApiOperation({ summary: 'Upload a vehicle photo (maximum 10 MB)' })
+  @ApiEnvelope(ImageDataDto, 201)
+  uploadVehiclePhoto(
+    @CurrentUser() user: JwtClaims,
+    @Param('vehicleId', ParseUUIDPipe) vehicleId: string,
+    @Body() dto: UploadVehiclePhotoDto,
+  ) {
+    return this.mediaService.uploadVehiclePhoto(user.user_id, vehicleId, dto);
+  }
+
+  @Post('documents/upload')
+  @ApiOperation({
+    summary: 'Upload a private driver or vehicle document (maximum 10 MB)',
+  })
+  @ApiEnvelope(DocumentUploadDataDto, 201)
+  uploadDocument(
+    @CurrentUser() user: JwtClaims,
+    @Body() dto: UploadDocumentDto,
+  ) {
+    return this.mediaService.uploadDocument(user.user_id, dto);
+  }
+  @Get('documents/:id/content')
+  @ApiQuery({ name: 'download', required: false, enum: ['1'] })
+  @ApiResponse({
+    status: 200,
+    description: 'Private document bytes',
+    schema: { type: 'string', format: 'binary' },
+  })
+  @ApiOperation({
+    summary: 'View a private document as its owner or an admin reviewer',
+  })
+  async viewDocument(
+    @CurrentUser() user: JwtClaims,
+    @Param('id') id: string,
+    @Res() response: Response,
+    @Query('download') download?: string,
+  ) {
+    const file = await this.mediaService.documentContent(user.user_id, id);
+    response
+      .set({
+        'Content-Type': file.mime,
+        'Cache-Control': 'private, no-store',
+        'X-Content-Type-Options': 'nosniff',
+        // PDFs are downloaded or fetched as bytes for canvas rendering, never embedded.
+        'Content-Disposition': `${download === '1' || file.mime === 'application/pdf' ? 'attachment' : 'inline'}; filename="document.${file.mime === 'application/pdf' ? 'pdf' : file.mime === 'image/jpeg' ? 'jpg' : file.mime === 'image/png' ? 'png' : 'webp'}"`,
+        'Content-Security-Policy': "sandbox; default-src 'none'",
+        'Cross-Origin-Resource-Policy': 'same-origin',
+        'Referrer-Policy': 'no-referrer',
+      })
+      .send(file.data);
+  }
 
   @Get('upload-auth')
   @ApiOperation({
@@ -72,7 +133,13 @@ export class MediaController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Delete image metadata and ImageKit file' })
   @ApiEnvelope(MessageResponseDto, 200)
-  deleteImage(@CurrentUser() user: JwtClaims, @Param('id') id: string) {
-    return this.mediaService.deleteImage(user.user_id, id);
+  @ApiQuery({ name: 'expected_revision', required: false, type: Number })
+  deleteImage(
+    @CurrentUser() user: JwtClaims,
+    @Param('id') id: string,
+    @Query('expected_revision', new ParseIntPipe({ optional: true }))
+    expectedRevision?: number,
+  ) {
+    return this.mediaService.deleteImage(user.user_id, id, expectedRevision);
   }
 }

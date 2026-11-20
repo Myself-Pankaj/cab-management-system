@@ -1,4 +1,8 @@
-import { Injectable, BadGatewayException, ServiceUnavailableException } from '@nestjs/common';
+import {
+  Injectable,
+  BadGatewayException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { AppConfigService } from '@app/core';
 import { RideErrors } from '../rides/types/ride-errors.js';
 
@@ -14,24 +18,56 @@ export class MapsService {
 
   async autocomplete(text: string) {
     const { orsApiKey, orsBaseUrl } = this.config.booking;
-    if (!orsApiKey) throw new ServiceUnavailableException('Location search is not configured');
-    const url = new URL((orsBaseUrl.endsWith('/') ? orsBaseUrl.slice(0, -1) : orsBaseUrl) + '/geocode/autocomplete');
+    if (!orsApiKey)
+      throw new ServiceUnavailableException(
+        'Location search is not configured',
+      );
+    const url = new URL(
+      (orsBaseUrl.endsWith('/') ? orsBaseUrl.slice(0, -1) : orsBaseUrl) +
+        '/geocode/autocomplete',
+    );
     url.searchParams.set('text', text);
     url.searchParams.set('boundary.country', 'IND');
     url.searchParams.set('size', '6');
     try {
-      const response = await fetch(url, { headers: { Authorization: orsApiKey }, signal: AbortSignal.timeout(8000) });
+      const response = await fetch(url, {
+        headers: { Authorization: orsApiKey },
+        signal: AbortSignal.timeout(8000),
+      });
       if (!response.ok) throw new Error('Provider failed');
-      const data = await response.json() as { features?: Array<{ geometry?: { coordinates?: number[] }; properties?: { gid?: string; label?: string } }> };
-      if (!Array.isArray(data.features)) throw new Error('Invalid provider response');
+      const data = (await response.json()) as {
+        features?: Array<{
+          geometry?: { coordinates?: number[] };
+          properties?: { gid?: string; label?: string };
+        }>;
+      };
+      if (!Array.isArray(data.features))
+        throw new Error('Invalid provider response');
       return data.features.flatMap((feature) => {
         const [longitude, latitude] = feature.geometry?.coordinates ?? [];
         const label = feature.properties?.label;
-        if (!label || !Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude!) > 90 || Math.abs(longitude!) > 180) return [];
-        return [{ id: feature.properties?.gid ?? latitude + ',' + longitude, label, latitude: latitude!, longitude: longitude! }];
+        if (
+          !label ||
+          !Number.isFinite(latitude) ||
+          !Number.isFinite(longitude) ||
+          Math.abs(latitude!) > 90 ||
+          Math.abs(longitude!) > 180
+        )
+          return [];
+        return [
+          {
+            id: feature.properties?.gid ?? latitude + ',' + longitude,
+            label,
+            latitude: latitude!,
+            longitude: longitude!,
+          },
+        ];
       });
-    } catch {
-      throw new BadGatewayException('Location search is unavailable. Please try again.');
+    } catch (cause) {
+      throw new BadGatewayException(
+        'Location search is unavailable. Please try again.',
+        { cause },
+      );
     }
   }
 
@@ -74,7 +110,10 @@ export class MapsService {
       }
 
       const data = (await response.json()) as {
-        routes?: Array<{ geometry?: string; summary?: { distance?: number; duration?: number } }>;
+        routes?: Array<{
+          geometry?: string;
+          summary?: { distance?: number; duration?: number };
+        }>;
       };
 
       const summary = data.routes?.[0]?.summary;
@@ -99,7 +138,7 @@ export class MapsService {
       if (error instanceof Error && 'errorCode' in error) {
         throw error;
       }
-      throw RideErrors.mapsFailed();
+      throw RideErrors.mapsFailed(error);
     }
   }
 }

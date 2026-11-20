@@ -1,9 +1,12 @@
+import { adminVehicleBlockers } from '@db/queries/admin/reporting.queries.js';
 import { Injectable } from '@nestjs/common';
 import type { PoolClient } from 'pg';
 import { BaseRepository } from '@app/core';
 import {
   countActiveVehiclesByProfileId,
   createVehicle,
+  reviewVehicleGroup,
+  markVehiclePhotosCorrected,
   getVehicleById,
   listVehiclesByProfileId,
   type ICreateVehicleParams,
@@ -11,6 +14,10 @@ import {
 
 @Injectable()
 export class VehicleRepository extends BaseRepository {
+  blockers(id: string, client: PoolClient) {
+    return adminVehicleBlockers.run({ vehicleId: id }, client);
+  }
+
   async updateDetails(
     id: string,
     params: ICreateVehicleParams,
@@ -32,6 +39,24 @@ export class VehicleRepository extends BaseRepository {
       ],
     );
     return result.rows[0]!;
+  }
+
+  async reviewGroup(
+    id: string,
+    group: 'DETAILS' | 'PHOTOS',
+    status: 'PENDING' | 'APPROVED' | 'REJECTED',
+    reason: string | null,
+    client: PoolClient,
+    increment = false,
+  ) {
+    await reviewVehicleGroup.run(
+      { id, reviewGroup: group, status, reason, increment },
+      client,
+    );
+  }
+
+  async photoCorrected(id: string, client: PoolClient) {
+    await markVehiclePhotosCorrected.run({ id }, client);
   }
 
   async create(params: ICreateVehicleParams, client?: PoolClient) {

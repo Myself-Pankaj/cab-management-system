@@ -12,7 +12,10 @@ import {
 export class DriverVerificationRepository extends BaseRepository {
   async create(driverProfileId: string, client?: PoolClient) {
     const connection = client ?? this.pool;
-    const [row] = await createDriverVerification.run({ driverProfileId }, connection);
+    const [row] = await createDriverVerification.run(
+      { driverProfileId },
+      connection,
+    );
     if (!row) {
       throw new Error('Failed to create driver verification');
     }
@@ -34,10 +37,11 @@ export class DriverVerificationRepository extends BaseRepository {
     reviewedBy: string,
     rejectionReason: string | null,
     client?: PoolClient,
+    correctionDocumentIds?: string[],
   ) {
     const connection = client ?? this.pool;
     const [row] = await updateDriverVerificationReview.run(
-      { id, status, reviewedBy, rejectionReason },
+      { id, status, reviewedBy, rejectionReason, correctionDocumentIds },
       connection,
     );
     return row ?? null;

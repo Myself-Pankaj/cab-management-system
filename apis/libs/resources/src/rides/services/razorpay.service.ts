@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import Razorpay from 'razorpay';
 import { AppConfigService } from '@app/core';
@@ -25,8 +25,12 @@ export class RazorpayService {
   }
 
   isConfigured(): boolean {
-    const { keyId, keySecret } = this.config.razorpay;
-    return Boolean(keyId && keySecret);
+    const { keyId, keySecret, webhookSecret } = this.config.razorpay;
+    // Local checkout confirms payments through the authenticated verification API.
+    // Deployed environments also need webhooks for interrupted checkout sessions.
+    return Boolean(
+      keyId && keySecret && (this.config.isDevelopment || webhookSecret),
+    );
   }
 
   getKeyId(): string {
@@ -43,6 +47,22 @@ export class RazorpayService {
       receipt,
       payment_capture: true,
     });
+  }
+
+  fetchOrder(id: string) {
+    return this.getClient().orders.fetch(id);
+  }
+  fetchPayment(id: string) {
+    return this.getClient().payments.fetch(id);
+  }
+  verifyCheckout(orderId: string, paymentId: string, signature: string) {
+    const expected = createHmac('sha256', this.config.razorpay.keySecret)
+      .update(`${orderId}|${paymentId}`)
+      .digest('hex');
+    const a = Buffer.from(expected);
+    const b = Buffer.from(signature);
+    if (a.length !== b.length || !timingSafeEqual(a, b))
+      throw new BadRequestException('Invalid payment signature');
   }
 
   async createRefund(paymentId: string, amountInr: number) {

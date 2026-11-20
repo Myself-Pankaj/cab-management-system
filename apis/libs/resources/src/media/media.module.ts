@@ -1,3 +1,7 @@
+import { DriverVerificationRepository } from '../drivers/repositories/driver-verification.repository.js';
+import { MediaCleanupService } from './services/media-cleanup.service.js';
+import { MediaCleanupRepository } from './repositories/media-cleanup.repository.js';
+import { UserRepository } from '../auth/repositories/user.repository.js';
 import { Module } from '@nestjs/common';
 import { ImageRepository } from './repositories/image.repository.js';
 import { ImageKitService } from './services/imagekit.service.js';
@@ -9,9 +13,13 @@ import { VehicleDocumentRepository } from '../drivers/repositories/vehicle-docum
 
 @Module({
   providers: [
+    UserRepository,
     ImageRepository,
     ImageKitService,
     MediaService,
+    MediaCleanupService,
+    MediaCleanupRepository,
+    DriverVerificationRepository,
     DriverProfileRepository,
     DriverDocumentRepository,
     VehicleRepository,

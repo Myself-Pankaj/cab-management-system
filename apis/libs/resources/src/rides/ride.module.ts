@@ -1,3 +1,5 @@
+import { DriverRideService } from './services/driver-ride.service.js';
+import { DriverRideRepository } from './repositories/driver-ride.repository.js';
 import { Module } from '@nestjs/common';
 import { DriverModule } from '../drivers/driver.module.js';
 import { UserRepository } from '../auth/repositories/user.repository.js';
@@ -12,9 +14,7 @@ import { FareCalculatorService } from './services/fare-calculator.service.js';
 import { PaymentSummaryService } from './services/payment-summary.service.js';
 import { RideStatusService } from './services/ride-status.service.js';
 import { PassengerValidationService } from './services/passenger-validation.service.js';
-import {
-  RideQuoteService,
-} from './services/ride-quote.service.js';
+import { RideQuoteService } from './services/ride-quote.service.js';
 import { VehicleCategoryService } from './services/vehicle-category.service.js';
 import { RideBookingService } from './services/ride-booking.service.js';
 import { RazorpayService } from './services/razorpay.service.js';
@@ -24,6 +24,8 @@ import { AdminRideService } from './services/admin-ride.service.js';
 @Module({
   imports: [DriverModule],
   providers: [
+    DriverRideService,
+    DriverRideRepository,
     MapsService,
     UserRepository,
     VehicleFareRateRepository,
@@ -44,6 +46,7 @@ import { AdminRideService } from './services/admin-ride.service.js';
     AdminRideService,
   ],
   exports: [
+    DriverRideService,
     MapsService,
     VehicleCategoryService,
     RideQuoteService,

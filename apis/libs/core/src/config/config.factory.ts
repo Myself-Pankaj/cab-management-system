@@ -3,16 +3,11 @@ import * as path from 'path';
 import * as winston from 'winston';
 import 'winston-daily-rotate-file';
 import { utilities as nestWinstonUtilities } from 'nest-winston';
-import {
-  AppConfig,
-  DatabaseConfig,
-  LoggerConfig,
-} from './config.interface.js';
+import { AppConfig, DatabaseConfig, LoggerConfig } from './config.interface.js';
 import { EnvironmentVariables } from './env.schema.js';
+import { sanitizeLogValue, summarizeLogValue } from '../logger/log-sanitizer.js';
 
-function buildSsl(
-  env: EnvironmentVariables,
-): DatabaseConfig['ssl'] {
+function buildSsl(env: EnvironmentVariables): DatabaseConfig['ssl'] {
   if (env.DB_SSL_MODE === 'disable') return false;
 
   const ssl: { ca?: string; rejectUnauthorized: boolean } = {
@@ -76,15 +71,6 @@ export function buildLoggerConfig(env: EnvironmentVariables): LoggerConfig {
   };
 }
 
-const PRODUCTION_CONSOLE_CONTEXTS = [
-  'Bootstrap',
-  'DatabaseService',
-  'DatabaseModule',
-  'ConfigValidation',
-  'NestFactory',
-  'NestApplication',
-];
-
 const productionFormat = winston.format.printf(
   ({
     timestamp,
@@ -108,38 +94,47 @@ const productionFormat = winston.format.printf(
     if (stack) logObject.stack = stack;
     if (Object.keys(metadata).length > 0) logObject.metadata = metadata;
 
-    return JSON.stringify(logObject);
+    return JSON.stringify(sanitizeLogValue(logObject));
   },
 );
 
 export function buildWinstonOptions(
   config: LoggerConfig,
 ): winston.LoggerOptions {
+  const redactionFormat = winston.format((info) => {
+    const sanitized = sanitizeLogValue(
+      Object.fromEntries(Object.entries(info)),
+    );
+    // Remove unsanitized fields (including preformatted messages and splat data).
+    for (const key of Reflect.ownKeys(info)) {
+      if (key !== Symbol.for('level')) delete info[key];
+    }
+    return Object.assign(info, sanitized);
+  });
+
   const fileFormat = winston.format.combine(
     winston.format.timestamp(),
     winston.format.errors({ stack: true }),
+    redactionFormat(),
   );
 
-  const productionConsoleFormat = winston.format.combine(
-    winston.format.colorize(),
-    winston.format((info) => {
-      const ctx = String(info.context || 'Application');
-      return PRODUCTION_CONSOLE_CONTEXTS.includes(ctx) ? info : false;
-    })(),
-    winston.format.printf(({ level, message, context }) => {
-      const ctx = context || 'Application';
-      return `[${ctx}] ${message}`;
-    }),
-  );
+  const consoleSummaryFormat = winston.format((info) => {
+    const summary = summarizeLogValue(Object.fromEntries(Object.entries(info)));
+    for (const key of Reflect.ownKeys(info)) {
+      if (key !== Symbol.for('level')) delete info[key];
+    }
+    return Object.assign(info, summary);
+  });
 
   const consoleTransport = new winston.transports.Console({
     level: config.level,
     format: config.isProduction
-      ? productionConsoleFormat
+      ? winston.format.combine(fileFormat, consoleSummaryFormat(), productionFormat)
       : winston.format.combine(
-          winston.format.colorize(),
+          redactionFormat(),
+          consoleSummaryFormat(),
           nestWinstonUtilities.format.nestLike('CabAPI', {
-            prettyPrint: true,
+            prettyPrint: false,
             colors: true,
           }),
         ),
@@ -173,8 +168,10 @@ export function buildWinstonOptions(
 
   return {
     level: config.level,
+    // Sanitize before any transport, including the development console.
+    format: redactionFormat(),
     transports: [consoleTransport, fileInfoTransport, fileErrorTransport],
-    exceptionHandlers: [fileErrorTransport],
-    rejectionHandlers: [fileErrorTransport],
+    exceptionHandlers: [consoleTransport, fileErrorTransport],
+    rejectionHandlers: [consoleTransport, fileErrorTransport],
   };
 }

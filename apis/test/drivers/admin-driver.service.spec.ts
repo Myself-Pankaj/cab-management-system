@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { makeCorrection } from '../../libs/resources/src/drivers/types/onboarding-policy.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Reflector } from '@nestjs/core';
 import type { ExecutionContext } from '@nestjs/common';
@@ -10,6 +12,7 @@ import { onboardingFixture } from './onboarding.fixture.js';
 describe('Admin driver review', () => {
   let f: ReturnType<typeof onboardingFixture>;
   let reviews: {
+    create: ReturnType<typeof vi.fn>;
     findLatestByProfileId: ReturnType<typeof vi.fn>;
     updateReview: ReturnType<typeof vi.fn>;
   };
@@ -17,14 +20,22 @@ describe('Admin driver review', () => {
   beforeEach(() => {
     f = onboardingFixture();
     f.profile.status = 'PENDING_VERIFICATION';
+    f.vehicle.details_review_status = 'APPROVED';
+    f.vehicle.photos_review_status = 'APPROVED';
+    [...f.driverDocuments, ...f.vehicleDocuments].forEach((d) => {
+      d.status = 'APPROVED';
+    });
     reviews = {
+      create: f.verifications.create,
       findLatestByProfileId: vi.fn().mockResolvedValue(f.verification),
-      updateReview: vi.fn(async (_id, status, _admin, reason) => ({
-        ...f.verification,
-        status,
-        rejection_reason: reason,
-        reviewed_at: new Date(),
-      })),
+      updateReview: vi.fn(async (_id, status, _admin, reason) => {
+        Object.assign(f.verification, {
+          status,
+          rejection_reason: reason,
+          reviewed_at: new Date(),
+        });
+        return f.verification;
+      }),
     };
     service = new AdminDriverService(
       f.user as never,
@@ -41,6 +52,8 @@ describe('Admin driver review', () => {
   });
   it('approves a complete application with one decision', async () => {
     const result = await service.reviewProfile(f.profile.id, 'admin', {
+      operation_id: randomUUID(),
+      reason: 'Reviewed supporting documents',
       decision: 'APPROVED',
     });
     expect(result.profile?.status).toBe('APPROVED');
@@ -50,19 +63,48 @@ describe('Admin driver review', () => {
       'admin',
       null,
       f.client,
+      undefined,
     );
     expect(f.profiles.lockById).toHaveBeenCalledWith(f.profile.id, f.client);
+  });
+  it('reopens an approved legacy application with an audited correction reason', async () => {
+    f.profile.status = 'APPROVED';
+    f.verification.status = 'APPROVED';
+    const doc = f.vehicleDocuments[2];
+    doc.status = 'REJECTED';
+    doc.correction = makeCorrection(doc, 'IMAGE', []);
+    const result = await service.requestCorrections(
+      f.profile.id,
+      'admin',
+      'Insurance image required',
+      randomUUID(),
+    );
+    expect(result.profile?.status).toBe('APPROVED');
+    expect(f.profiles.audit).toHaveBeenCalledWith(
+      f.profile.id,
+      'PROFILE',
+      null,
+      'REJECTED',
+      'admin',
+      'Insurance image required',
+      f.client,
+    );
   });
   it('revalidates completeness before approval', async () => {
     f.vehicleDocs.listByVehicleId.mockResolvedValue([]);
     await expect(
-      service.reviewProfile(f.profile.id, 'admin', { decision: 'APPROVED' }),
+      service.reviewProfile(f.profile.id, 'admin', {
+        operation_id: randomUUID(),
+        reason: 'Reviewed supporting documents',
+        decision: 'APPROVED',
+      }),
     ).rejects.toEqual(DriverErrors.documentsIncomplete());
     expect(f.profiles.updateStatus).not.toHaveBeenCalled();
   });
   it('requires a nonblank rejection reason', async () => {
     await expect(
       service.reviewProfile(f.profile.id, 'admin', {
+        operation_id: randomUUID(),
         decision: 'REJECTED',
         rejection_reason: '   ',
       }),
@@ -70,12 +112,29 @@ describe('Admin driver review', () => {
     expect(f.profiles.updateStatus).not.toHaveBeenCalled();
   });
   it('returns the application for corrections with a saved reason', async () => {
+    const doc = f.vehicleDocuments[0];
+    doc.status = 'REJECTED';
+    doc.correction = makeCorrection(doc, 'IMAGE', []);
     const result = await service.reviewProfile(f.profile.id, 'admin', {
+      operation_id: randomUUID(),
       decision: 'REJECTED',
       rejection_reason: ' Unreadable RC ',
     });
     expect(result.profile?.status).toBe('REJECTED');
     expect(result.verification?.rejection_reason).toBe('Unreadable RC');
+  });
+  it('accepts the shared reason field for rejection without the legacy alias', async () => {
+    const doc = f.vehicleDocuments[0];
+    doc.status = 'REJECTED';
+    doc.correction = makeCorrection(doc, 'IMAGE', []);
+    const result = await service.reviewProfile(f.profile.id, 'admin', {
+      operation_id: randomUUID(),
+      decision: 'REJECTED',
+      reason: 'Unreadable registration',
+    });
+    expect(result.verification?.rejection_reason).toBe(
+      'Unreadable registration',
+    );
   });
   it('rejects a second conflicting decision after the first commits', async () => {
     f.profiles.updateStatus.mockImplementation(async (_id, status) => {
@@ -83,14 +142,17 @@ describe('Admin driver review', () => {
       return { ...f.profile };
     });
     await service.reviewProfile(f.profile.id, 'admin', {
+      operation_id: randomUUID(),
+      reason: 'Reviewed supporting documents',
       decision: 'APPROVED',
     });
     await expect(
       service.reviewProfile(f.profile.id, 'other-admin', {
+        operation_id: randomUUID(),
         decision: 'REJECTED',
         rejection_reason: 'No',
       }),
-    ).rejects.toEqual(DriverErrors.invalidStatusTransition());
+    ).rejects.toEqual(DriverErrors.verificationNotFound());
     expect(reviews.updateReview).toHaveBeenCalledTimes(1);
   });
   it.each(['Passenger', 'Driver', null])(

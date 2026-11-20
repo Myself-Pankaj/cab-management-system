@@ -1,4 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { adminMutation } from '../../admin/admin-mutation.js';
+import { BadRequestException, Injectable } from '@nestjs/common';
+import { DriverRideService } from './driver-ride.service.js';
+import { DriverRideRepository } from '../repositories/driver-ride.repository.js';
 import { DatabaseService } from '@app/core';
 import { UserRepository } from '../../auth/repositories/user.repository.js';
 import { DriverProfileRepository } from '../../drivers/repositories/driver-profile.repository.js';
@@ -6,13 +9,16 @@ import { VehicleRepository } from '../../drivers/repositories/vehicle.repository
 import { PaymentRepository } from '../repositories/payment.repository.js';
 import { RideCancellationRepository } from '../repositories/ride-cancellation.repository.js';
 import { RideRepository } from '../repositories/ride.repository.js';
-import type { AssignRideDto, CancelRideDto, UpdateRideStatusDto } from '../dto/ride.dto.js';
+import type {
+  AssignRideDto,
+  CancelRideDto,
+  UpdateRideStatusDto,
+} from '../dto/ride.dto.js';
 import { RideBookingService } from './ride-booking.service.js';
 import { RideStatusService } from './ride-status.service.js';
 import { RazorpayService } from './razorpay.service.js';
 import { RideErrors } from '../types/ride-errors.js';
-import { DriverErrors } from '../../drivers/types/driver-errors.js';
-import { toPaymentResponse, toRideResponse } from '../types/ride.types.js';
+import { toRideResponse } from '../types/ride.types.js';
 import type { ride_status } from '@db/queries/rides/rides.queries.js';
 import type { vehicle_category } from '@db/queries/rides/vehicle_fare_rates.queries.js';
 
@@ -37,6 +43,8 @@ export class AdminRideService {
     private readonly rideBookingService: RideBookingService,
     private readonly statusService: RideStatusService,
     private readonly razorpayService: RazorpayService,
+    private readonly driverRides: DriverRideService,
+    private readonly operations: DriverRideRepository,
   ) {}
 
   async listRides(
@@ -45,7 +53,12 @@ export class AdminRideService {
     limit = 20,
     offset = 0,
   ) {
-    const rides = await this.rideRepository.listAdmin(status ?? null, category ?? null, limit, offset);
+    const rides = await this.rideRepository.listAdmin(
+      status ?? null,
+      category ?? null,
+      limit,
+      offset,
+    );
     return { rides: rides.map(toRideResponse) };
   }
 
@@ -55,7 +68,7 @@ export class AdminRideService {
       throw RideErrors.rideNotFound();
     }
 
-    const detail = await this.rideBookingService.buildRideDetail(ride);
+    const detail = await this.driverRides.detail(rideId, '', true);
     const booker = await this.userRepository.findById(ride.booked_by_user_id);
 
     return {
@@ -72,52 +85,15 @@ export class AdminRideService {
   }
 
   async assignRide(rideId: string, adminId: string, dto: AssignRideDto) {
-    const ride = await this.rideRepository.findById(rideId);
-    if (!ride) {
-      throw RideErrors.rideNotFound();
-    }
-    if (ride.status !== 'PENDING_ASSIGNMENT') {
-      throw RideErrors.notAssignable();
-    }
-
-    const profile = await this.profileRepository.findById(dto.driver_profile_id);
-    if (!profile || profile.status !== 'APPROVED') {
-      throw RideErrors.driverNotAssignable();
-    }
-
-    const vehicle = await this.vehicleRepository.findById(dto.vehicle_id);
-    if (!vehicle || vehicle.driver_profile_id !== dto.driver_profile_id) {
-      throw DriverErrors.vehicleNotFound();
-    }
-    if (vehicle.vehicle_type !== ride.requested_vehicle_category) {
-      throw RideErrors.vehicleCategoryMismatch();
-    }
-
-    const updated = await this.databaseService.withTransaction(async (client) => {
-      const assigned = await this.rideRepository.assign(
-        rideId,
-        dto.driver_profile_id,
-        dto.vehicle_id,
-        adminId,
-        client,
-      );
-      if (!assigned) {
-        throw RideErrors.rideNotFound();
-      }
-
-      await this.statusService.recordTransition(
-        rideId,
-        ride.status,
-        'DRIVER_ASSIGNED',
-        adminId,
-        'Driver and vehicle assigned',
-        client,
-      );
-
-      return assigned;
-    });
-
-    return this.rideBookingService.buildRideDetail(updated);
+    if (!dto.reason?.trim())
+      throw new BadRequestException('An assignment reason is required');
+    return this.driverRides.assign(
+      rideId,
+      adminId,
+      dto.driver_profile_id,
+      dto.vehicle_id,
+      { operation_id: dto.operation_id, reason: dto.reason },
+    );
   }
 
   async cancelRide(rideId: string, adminId: string, dto: CancelRideDto) {
@@ -125,38 +101,82 @@ export class AdminRideService {
     if (!ride) {
       throw RideErrors.rideNotFound();
     }
-    if (!CANCELLABLE_STATUSES.includes(ride.status)) {
-      throw RideErrors.rideNotCancellable();
-    }
+    if (!dto.reason?.trim())
+      throw new BadRequestException('A cancellation reason is required');
+    let replayed = false;
 
-    const payments = await this.paymentRepository.listByRideId(rideId);
-    const paidOnline = payments.filter(
-      (p) => p.payment_type === 'ONLINE' && p.status === 'PAID' && p.provider_payment_id,
-    );
-    const refundRequired = dto.refund_required ?? paidOnline.length > 0;
+    const { paidOnline, refundRequired } =
+      await this.databaseService.withTransaction((client) =>
+        adminMutation(
+          client,
+          adminId,
+          dto.operation_id,
+          `cancel:${rideId}`,
+          dto,
+          async () => {
+            if (ride.driver_profile_id && ride.vehicle_id)
+              await this.operations.lockResources(
+                ride.driver_profile_id,
+                ride.vehicle_id,
+                client,
+              );
+            const locked = await this.operations.lockRide(rideId, client);
+            if (
+              !locked ||
+              locked.driver_profile_id !== ride.driver_profile_id ||
+              locked.vehicle_id !== ride.vehicle_id ||
+              !CANCELLABLE_STATUSES.includes(locked.status)
+            )
+              throw RideErrors.rideNotCancellable();
+            await this.operations.cancelOffers(
+              rideId,
+              adminId,
+              dto.reason ?? null,
+              client,
+            );
+            const payments = await this.paymentRepository.listByRideId(
+              rideId,
+              client,
+            );
+            const paidOnline = payments.filter(
+              (p) =>
+                p.payment_type === 'ONLINE' &&
+                p.status === 'PAID' &&
+                p.provider_payment_id,
+            );
+            const refundRequired = dto.refund_required ?? paidOnline.length > 0;
+            await this.cancellationRepository.create(
+              rideId,
+              adminId,
+              dto.reason ?? null,
+              refundRequired,
+              client,
+            );
 
-    await this.databaseService.withTransaction(async (client) => {
-      await this.cancellationRepository.create(
-        rideId,
-        adminId,
-        dto.reason ?? null,
-        refundRequired,
-        client,
+            await this.rideRepository.cancel(
+              rideId,
+              adminId,
+              dto.reason ?? null,
+              client,
+            );
+
+            await this.statusService.recordTransition(
+              rideId,
+              locked.status,
+              'CANCELLED',
+              adminId,
+              dto.reason ?? 'Ride cancelled by admin',
+              client,
+            );
+            return { paidOnline, refundRequired };
+          },
+          () => {
+            replayed = true;
+          },
+        ),
       );
 
-      await this.rideRepository.cancel(rideId, adminId, dto.reason ?? null, client);
-
-      await this.statusService.recordTransition(
-        rideId,
-        ride.status,
-        'CANCELLED',
-        adminId,
-        dto.reason ?? 'Ride cancelled by admin',
-        client,
-      );
-    });
-
-    if (refundRequired && this.razorpayService.isConfigured()) {
+    if (!replayed && refundRequired && this.razorpayService.isConfigured()) {
       for (const payment of paidOnline) {
         if (payment.provider_payment_id) {
           await this.razorpayService.createRefund(
@@ -175,50 +195,21 @@ export class AdminRideService {
     return this.rideBookingService.buildRideDetail(updated);
   }
 
-  async updateStatus(rideId: string, adminId: string, dto: UpdateRideStatusDto) {
-    const ride = await this.rideRepository.findById(rideId);
-    if (!ride) {
-      throw RideErrors.rideNotFound();
-    }
-
-    this.statusService.assertTransition(ride.status, dto.status);
-
-    const updated = await this.databaseService.withTransaction(async (client) => {
-      const row = await this.rideRepository.updateStatus(rideId, dto.status, client);
-      if (!row) {
-        throw RideErrors.rideNotFound();
-      }
-
-      await this.statusService.recordTransition(
-        rideId,
-        ride.status,
-        dto.status,
-        adminId,
-        `Status updated to ${dto.status}`,
-        client,
-      );
-
-      return row;
-    });
-
-    return this.rideBookingService.buildRideDetail(updated);
+  async updateStatus(
+    rideId: string,
+    adminId: string,
+    dto: UpdateRideStatusDto,
+  ) {
+    if (dto.status === 'IN_PROGRESS')
+      return this.driverRides.start(rideId, adminId, true, dto.reason);
+    throw new BadRequestException(
+      'Use the dedicated assignment, cancellation, or cash-declaration completion endpoint',
+    );
   }
 
-  async markOfflinePaid(rideId: string, paymentId: string) {
-    const ride = await this.rideRepository.findById(rideId);
-    if (!ride) {
-      throw RideErrors.rideNotFound();
-    }
-
-    const payment = await this.paymentRepository.findById(paymentId);
-    if (!payment || payment.ride_id !== rideId) {
-      throw RideErrors.paymentNotFound();
-    }
-    if (payment.payment_type !== 'OFFLINE') {
-      throw RideErrors.paymentNotPending();
-    }
-
-    const updated = await this.paymentRepository.markOfflinePaid(paymentId);
-    return { payment: updated ? toPaymentResponse(updated) : null };
+  async markOfflinePaid(_rideId: string, _paymentId: string) {
+    throw new BadRequestException(
+      'Record cash collection through the ride completion endpoint',
+    );
   }
 }

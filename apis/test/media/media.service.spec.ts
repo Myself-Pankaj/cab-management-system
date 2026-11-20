@@ -1,167 +1,177 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MediaService } from '../../libs/resources/src/media/services/media.service.js';
-import { DriverErrors } from '../../libs/resources/src/drivers/types/driver-errors.js';
-import { MediaErrors } from '../../libs/resources/src/media/types/media-errors.js';
-
-describe('MediaService', () => {
-  const imageRepository = {
+import { documentImageType } from '../../libs/resources/src/media/types/document-image.js';
+const png = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aR5sAAAAASUVORK5CYII=',
+  'base64',
+);
+describe('Private driver documents', () => {
+  const date = new Date();
+  const image = {
+    id: 'image',
+    owner_type: 'DRIVER_DOCUMENT',
+    owner_id: 'doc',
+    image_type: 'DOCUMENT',
+    imagekit_file_id: 'file',
+    url: 'https://example.com/private.png',
+    file_name: 'document.png',
+    mime_type: 'image/png',
+    created_at: date,
+    updated_at: date,
+  };
+  const images = {
     create: vi.fn(),
-    findByFileId: vi.fn().mockResolvedValue(null),
-    listByOwner: vi.fn(),
+    markPrivate: vi.fn(),
     findById: vi.fn(),
+    isPrivate: vi.fn(),
+    listByOwner: vi.fn(),
     deleteById: vi.fn(),
   };
-  const imageKitService = {
-    getUploadAuth: vi
-      .fn()
-      .mockReturnValue({ token: 't', signature: 's', expire: 1 }),
+  const provider = {
+    uploadPrivate: vi.fn(),
+    privateContent: vi.fn(),
     deleteFile: vi.fn(),
+    getUploadAuth: vi.fn(),
   };
-  const profileRepository = { findByUserId: vi.fn(), lockById: vi.fn() };
-  const databaseService = { withTransaction: vi.fn(async (work) => work({})) };
-  const documentRepository = { findById: vi.fn() };
-  const vehicleRepository = { findById: vi.fn() };
-  const vehicleDocumentRepository = { findById: vi.fn() };
-
-  let service: MediaService;
-
+  const profiles = { findByUserId: vi.fn(), lockById: vi.fn() };
+  const docs = { findById: vi.fn(), saveState: vi.fn() };
+  const vehicles = { listByProfileId: vi.fn().mockResolvedValue([]) };
+  const verifications = {
+    findLatestByProfileId: vi.fn().mockResolvedValue(null),
+  };
+  const cleanup = { enqueue: vi.fn(), discard: vi.fn() };
+  const users = { findById: vi.fn() };
+  const db = { withTransaction: vi.fn(async (work) => work({})) };
+  const service = new MediaService(
+    images as never,
+    provider as never,
+    profiles as never,
+    docs as never,
+    vehicles as never,
+    {} as never,
+    db as never,
+    { errorWithMetadata: vi.fn() } as never,
+    users as never,
+    verifications as never,
+    cleanup as never,
+  );
   beforeEach(() => {
-    vi.clearAllMocks();
-    imageRepository.findByFileId.mockResolvedValue(null);
-    profileRepository.lockById.mockResolvedValue({
-      id: 'profile-1',
-      status: 'DRAFT',
+    vi.resetAllMocks();
+    images.create.mockResolvedValue(image);
+    images.listByOwner.mockResolvedValue([]);
+    docs.saveState.mockResolvedValue({ revision: 1 });
+    vehicles.listByProfileId.mockResolvedValue([]);
+    verifications.findLatestByProfileId.mockResolvedValue(null);
+    images.findById.mockResolvedValue(image);
+    images.isPrivate.mockResolvedValue(true);
+    profiles.findByUserId.mockResolvedValue({ id: 'driver' });
+    profiles.lockById.mockResolvedValue({ id: 'driver', status: 'DRAFT' });
+    docs.findById.mockResolvedValue({
+      id: 'doc',
+      driver_profile_id: 'driver',
+      document_type: 'DRIVING_LICENCE',
+      document_number: null,
+      expiry_date: null,
+      revision: 0,
+      correction: null,
+      status: 'PENDING',
     });
-    service = new MediaService(
-      imageRepository as never,
-      imageKitService as never,
-      profileRepository as never,
-      documentRepository as never,
-      vehicleRepository as never,
-      vehicleDocumentRepository as never,
-      databaseService as never,
+    provider.uploadPrivate.mockResolvedValue({
+      fileId: 'file',
+      filePath: '/private.png',
+    });
+    provider.privateContent.mockResolvedValue(png);
+    users.findById.mockResolvedValue({ global_role: 'Driver' });
+    db.withTransaction.mockImplementation(async (work) => work({}));
+  });
+  it('validates bytes rather than the caller MIME type', () => {
+    expect(documentImageType(png).mime).toBe('image/png');
+    expect(() =>
+      documentImageType(Buffer.from('<script>fake.png</script>')),
+    ).toThrow('actual JPEG');
+    expect(() => documentImageType(Buffer.alloc(10 * 1024 * 1024 + 1))).toThrow(
+      '10 MB',
     );
   });
-
-  it('returns ImageKit upload auth parameters', () => {
-    const auth = service.getUploadAuth();
-    expect(auth).toEqual({ token: 't', signature: 's', expire: 1 });
-  });
-
-  it('registers image metadata for owned driver document', async () => {
-    documentRepository.findById.mockResolvedValue({
-      id: 'doc-1',
-      driver_profile_id: 'profile-1',
-    });
-    profileRepository.findByUserId.mockResolvedValue({ id: 'profile-1' });
-    imageRepository.create.mockResolvedValue({
-      id: 'img-1',
-      owner_type: 'DRIVER_DOCUMENT',
-      owner_id: 'doc-1',
-      image_type: 'DOCUMENT',
-      imagekit_file_id: 'file-1',
-      url: 'https://ik.imagekit.io/demo/file.jpg',
-      file_name: 'file.jpg',
-      mime_type: 'image/jpeg',
-      created_at: new Date(),
-      updated_at: new Date(),
-    });
-
-    const result = await service.registerImage('user-1', {
-      owner_type: 'DRIVER_DOCUMENT',
-      owner_id: 'doc-1',
-      image_type: 'DOCUMENT',
-      imagekit_file_id: 'file-1',
-      url: 'https://ik.imagekit.io/demo/file.jpg',
-    });
-
-    expect(result.image.imagekit_file_id).toBe('file-1');
-  });
-
-  it('rejects media registration when user does not own the owner record', async () => {
-    documentRepository.findById.mockResolvedValue({
-      id: 'doc-1',
-      driver_profile_id: 'profile-1',
-    });
-    profileRepository.findByUserId.mockResolvedValue({ id: 'other-profile' });
-
+  it('rejects arbitrary document URLs through the public registration endpoint', async () => {
     await expect(
-      service.registerImage('user-1', {
+      service.registerImage('user', {
         owner_type: 'DRIVER_DOCUMENT',
-        owner_id: 'doc-1',
+        owner_id: 'doc',
         image_type: 'DOCUMENT',
-        imagekit_file_id: 'file-1',
-        url: 'https://ik.imagekit.io/demo/file.jpg',
+        imagekit_file_id: 'foreign',
+        url: 'https://example.com',
       }),
-    ).rejects.toEqual(MediaErrors.forbidden());
+    ).rejects.toThrow('private document upload');
+    expect(images.create).not.toHaveBeenCalled();
   });
-  it.each(['PENDING_VERIFICATION', 'APPROVED', 'SUSPENDED'])(
-    'blocks upload registration and deletion in %s',
-    async (status) => {
-      profileRepository.findByUserId.mockResolvedValue({ id: 'profile-1' });
-      profileRepository.lockById.mockResolvedValue({ id: 'profile-1', status });
-      imageRepository.findById.mockResolvedValue({
-        id: 'image-1',
-        owner_type: 'DRIVER_DOCUMENT',
-        owner_id: 'doc-1',
-      });
-      await expect(
-        service.registerImage('user-1', {
-          owner_type: 'DRIVER_DOCUMENT',
-          owner_id: 'doc-1',
-          image_type: 'DOCUMENT',
-          imagekit_file_id: 'file-1',
-          url: 'https://example.com/doc.jpg',
-        }),
-      ).rejects.toEqual(DriverErrors.profileNotEditable());
-      await expect(service.deleteImage('user-1', 'image-1')).rejects.toEqual(
-        DriverErrors.profileNotEditable(),
-      );
-      expect(imageRepository.create).not.toHaveBeenCalled();
-      expect(imageRepository.deleteById).not.toHaveBeenCalled();
-      expect(imageKitService.deleteFile).not.toHaveBeenCalled();
-    },
-  );
-  it('returns existing metadata when upload registration is retried', async () => {
-    const image = {
-      id: 'image-1',
+  it('uploads privately and returns only an authenticated application URL', async () => {
+    const result = await service.uploadDocument('user', {
       owner_type: 'DRIVER_DOCUMENT',
-      owner_id: 'doc-1',
-      image_type: 'DOCUMENT',
-      imagekit_file_id: 'file-1',
-      url: 'https://example.com/doc.jpg',
-      file_name: 'doc.jpg',
-      mime_type: 'image/jpeg',
-      created_at: new Date(),
-      updated_at: new Date(),
-    };
-    profileRepository.findByUserId.mockResolvedValue({ id: 'profile-1' });
-    documentRepository.findById.mockResolvedValue({
-      id: 'doc-1',
-      driver_profile_id: 'profile-1',
+      owner_id: 'doc',
+      content_base64: png.toString('base64'),
+      expected_revision: 0,
     });
-    imageRepository.findByFileId.mockResolvedValue(image);
-    const result = await service.registerImage('user-1', {
-      owner_type: 'DRIVER_DOCUMENT',
-      owner_id: 'doc-1',
-      image_type: 'DOCUMENT',
-      imagekit_file_id: 'file-1',
-      url: image.url,
-    });
-    expect(result.image.id).toBe(image.id);
-    expect(imageRepository.create).not.toHaveBeenCalled();
+    expect(provider.uploadPrivate).toHaveBeenCalledWith(png, 'doc', 'png');
+    expect(images.markPrivate).toHaveBeenCalled();
+    expect(result.image.url).toBe('/api/v1/media/documents/image/content');
   });
-
-  it('allows reading owned images while the application is awaiting approval', async () => {
-    profileRepository.findByUserId.mockResolvedValue({ id: 'profile-1' });
-    documentRepository.findById.mockResolvedValue({
-      id: 'doc-1',
-      driver_profile_id: 'profile-1',
-    });
-    imageRepository.listByOwner.mockResolvedValue([]);
+  it('checks ownership before sending bytes to the provider', async () => {
+    profiles.findByUserId.mockResolvedValue({ id: 'another-driver' });
     await expect(
-      service.listImages('user-1', 'DRIVER_DOCUMENT', 'doc-1'),
-    ).resolves.toEqual({ images: [] });
-    expect(profileRepository.lockById).not.toHaveBeenCalled();
+      service.uploadDocument('user', {
+        owner_type: 'DRIVER_DOCUMENT',
+        owner_id: 'doc',
+        content_base64: png.toString('base64'),
+        expected_revision: 0,
+      }),
+    ).rejects.toThrow();
+    expect(provider.uploadPrivate).not.toHaveBeenCalled();
+  });
+  it('requires an explicit masked Aadhaar declaration', async () => {
+    docs.findById.mockResolvedValue({
+      driver_profile_id: 'driver',
+      document_type: 'AADHAAR',
+      revision: 0,
+      status: 'PENDING',
+    });
+    await expect(
+      service.uploadDocument('user', {
+        owner_type: 'DRIVER_DOCUMENT',
+        owner_id: 'doc',
+        content_base64: png.toString('base64'),
+        expected_revision: 0,
+      }),
+    ).rejects.toThrow('masked');
+  });
+  it('cleans up an uploaded file when attachment fails', async () => {
+    profiles.lockById
+      .mockResolvedValueOnce({ id: 'driver', status: 'DRAFT' })
+      .mockResolvedValueOnce({ id: 'driver', status: 'PENDING_VERIFICATION' });
+    await expect(
+      service.uploadDocument('user', {
+        owner_type: 'DRIVER_DOCUMENT',
+        owner_id: 'doc',
+        content_base64: png.toString('base64'),
+        expected_revision: 0,
+      }),
+    ).rejects.toThrow();
+    expect(cleanup.discard).toHaveBeenCalledWith('file');
+  });
+  it('allows only the owner or admin reviewer to view a private image', async () => {
+    await expect(
+      service.documentContent('user', 'image'),
+    ).resolves.toHaveProperty('mime', 'image/png');
+    profiles.findByUserId.mockResolvedValue({ id: 'other' });
+    await expect(service.documentContent('user', 'image')).rejects.toThrow();
+    users.findById.mockResolvedValue({ global_role: 'Admin' });
+    await expect(
+      service.documentContent('admin', 'image'),
+    ).resolves.toHaveProperty('mime', 'image/png');
+  });
+  it('quarantines legacy images until privacy is verified', async () => {
+    images.isPrivate.mockResolvedValue(false);
+    await expect(service.documentContent('user', 'image')).rejects.toThrow();
+    expect(provider.privateContent).not.toHaveBeenCalled();
   });
 });

@@ -11,6 +11,12 @@ export class DriverError extends HttpException {
 }
 
 export const DriverErrors = {
+  vehiclePhotoRequired: () =>
+    new DriverError(
+      'Add at least one photo for every active vehicle before submitting',
+      HttpStatus.BAD_REQUEST,
+      'VEHICLE_PHOTO_REQUIRED',
+    ),
   profileNotFound: () =>
     new DriverError(
       'Driver profile not found',

@@ -5,7 +5,12 @@ import {
   HttpException,
   HttpStatus,
 } from '@nestjs/common';
-import { randomUUID } from 'crypto';
+import {
+  requestContext,
+  requestRoute,
+  resolveRequestId,
+  REQUEST_ID_HEADER,
+} from '../logger/request-context.js';
 import { Request, Response } from 'express';
 import { ZodError } from 'zod';
 
@@ -43,8 +48,6 @@ interface ValidationErrorDetail {
   field: string;
   message: string;
 }
-
-const REQUEST_ID_HEADER = 'x-request-id';
 
 /**
  * Postgres SQLSTATE codes we map to specific HTTP responses.
@@ -146,29 +149,21 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
 
-    const requestId = this.resolveRequestId(request);
-    const errorResponse = this.resolveError(exception, request.url, requestId);
+    const requestId =
+      requestContext.getStore()?.requestId ??
+      resolveRequestId(request.headers[REQUEST_ID_HEADER]);
+    const errorResponse = this.resolveError(exception, request.path, requestId);
 
     this.logException(exception, request, errorResponse, requestId);
 
     // Surface the id even if a client never reads the body.
+    if (response.headersSent) {
+      // A streaming response cannot be replaced with a JSON error.
+      response.end();
+      return;
+    }
     response.setHeader(REQUEST_ID_HEADER, requestId);
     response.status(errorResponse.statusCode).json(errorResponse);
-  }
-
-  // ---------------------------------------------------------------------
-  // Request correlation
-  // ---------------------------------------------------------------------
-
-  private resolveRequestId(request: Request): string {
-    const existing = request.headers[REQUEST_ID_HEADER];
-    if (typeof existing === 'string' && existing.trim().length > 0) {
-      return existing;
-    }
-    if (Array.isArray(existing) && existing[0]) {
-      return existing[0];
-    }
-    return randomUUID();
   }
 
   // ---------------------------------------------------------------------
@@ -181,17 +176,21 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     errorResponse: ErrorResponse,
     requestId: string,
   ): void {
-    const logMessage = `[${requestId}] ${request.method} ${request.url} - ${errorResponse.statusCode}`;
-    const error = this.toError(exception);
-
-    // 5xx (or truly unknown) exceptions are real incidents: log at error
-    // level with the full stack. 4xx are expected client mistakes and
-    // don't need to page anyone or fill error dashboards with noise.
+    const metadata = {
+      requestId,
+      method: request.method,
+      route: requestRoute(request),
+      statusCode: errorResponse.statusCode,
+      errorCode: errorResponse.error.code,
+    };
     if (errorResponse.statusCode >= HttpStatus.INTERNAL_SERVER_ERROR) {
-      this.scopedLogger.error(logMessage, error);
+      this.scopedLogger.errorWithMetadata(
+        'HTTP request failed',
+        this.toError(exception),
+        metadata,
+      );
     } else {
-      this.scopedLogger.warn?.(logMessage) ??
-        this.scopedLogger.error(logMessage, error);
+      this.scopedLogger.warnWithMetadata('HTTP request rejected', metadata);
     }
   }
 
@@ -199,11 +198,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     if (exception instanceof Error) {
       return exception;
     }
-    try {
-      return new Error(JSON.stringify(exception));
-    } catch {
-      return new Error(String(exception));
-    }
+    return new Error('A non-Error value was thrown');
   }
 
   // ---------------------------------------------------------------------
@@ -268,9 +263,56 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       }
     }
 
-    return ResponseBuilder.error(status, message, path, 'HTTP_EXCEPTION', {
+    const candidate = (exception as HttpException & { errorCode?: unknown })
+      .errorCode;
+    const errorCode =
+      typeof candidate === 'string' && /^[A-Z][A-Z0-9_]{0,99}$/.test(candidate)
+        ? candidate
+        : 'HTTP_EXCEPTION';
+    // Generic server exceptions may contain provider internals. Domain errors
+    // have explicit public messages and machine-readable codes.
+    if (this.isProduction && status >= 500 && errorCode === 'HTTP_EXCEPTION') {
+      message = 'Internal server error';
+      validationErrors = undefined;
+    }
+    const summary =
+      body && typeof body === 'object' && 'payment_summary' in body
+        ? body.payment_summary
+        : undefined;
+    const safeSummary =
+      summary &&
+      typeof summary === 'object' &&
+      'remaining_amount' in summary &&
+      typeof summary.remaining_amount === 'number'
+        ? { remaining_amount: summary.remaining_amount }
+        : undefined;
+    return ResponseBuilder.error(status, message, path, errorCode, {
       validationErrors,
-      details: { requestId },
+      details: {
+        requestId,
+        ...(errorCode === 'VEHICLE_EDIT_BLOCKED' &&
+        typeof body === 'object' &&
+        body
+          ? {
+              blockingRideIds:
+                'blockingRideIds' in body && Array.isArray(body.blockingRideIds)
+                  ? body.blockingRideIds.filter(
+                      (id: unknown) => typeof id === 'string',
+                    )
+                  : [],
+              blockingOfferIds:
+                'blockingOfferIds' in body &&
+                Array.isArray(body.blockingOfferIds)
+                  ? body.blockingOfferIds.filter(
+                      (id: unknown) => typeof id === 'string',
+                    )
+                  : [],
+            }
+          : {}),
+        ...(status === 409 && safeSummary
+          ? { payment_summary: safeSummary }
+          : {}),
+      },
     });
   }
 

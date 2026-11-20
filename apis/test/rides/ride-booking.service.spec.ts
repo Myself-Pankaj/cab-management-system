@@ -30,7 +30,7 @@ describe('RideBookingService', () => {
       summary_status: 'UNPAID',
     }),
   };
-  const razorpayService = { createOrder: vi.fn(), getKeyId: vi.fn() };
+  const razorpayService = { isConfigured: vi.fn().mockReturnValue(true), createOrder: vi.fn(), getKeyId: vi.fn() };
 
   let service: RideBookingService;
 
@@ -70,6 +70,7 @@ describe('RideBookingService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     service = new RideBookingService(
+      {} as never,
       databaseService as never,
       rideRepository as never,
       passengerRepository as never,

@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
-import { App } from 'supertest/types';
+type App = Parameters<typeof request>[0];
 import { AppModule } from './../src/app.module.js';
 import { DatabaseService, HealthRepository } from '@app/core';
 import { GlobalExceptionFilter } from '@app/core/filter/global.filter.js';

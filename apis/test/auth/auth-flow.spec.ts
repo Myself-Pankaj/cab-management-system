@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
-import { App } from 'supertest/types';
+type App = Parameters<typeof request>[0];
 import cookieParser from 'cookie-parser';
 import { AppModule } from '../../src/app.module.js';
 import {
@@ -122,6 +122,8 @@ describe('Auth flow (e2e)', () => {
         log: vi.fn(),
         error: vi.fn(),
         warn: vi.fn(),
+        warnWithMetadata: vi.fn(),
+        errorWithMetadata: vi.fn(),
         logWithMetadata: vi.fn(),
       }),
     };
@@ -186,7 +188,7 @@ describe('Auth flow (e2e)', () => {
     app.setGlobalPrefix('api/v1');
     app.use(cookieParser());
 
-    const logger = mockLogger;
+    const logger = mockLogger as unknown as AppLogger;
     const configService =
       moduleFixture.get(AppConfigService, { strict: false }) ?? {
         isDevelopment: false,

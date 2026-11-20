@@ -1,8 +1,23 @@
+import {
+  applicationStatus,
+  assertVehicleCorrection,
+  assertSelectedForCorrection,
+  assertDocumentEditable,
+  correctedState,
+} from '../../drivers/types/onboarding-policy.js';
+import { DriverVerificationRepository } from '../../drivers/repositories/driver-verification.repository.js';
+import { MediaCleanupService } from './media-cleanup.service.js';
+import { UserRepository } from '../../auth/repositories/user.repository.js';
+import type { UploadDocumentDto } from '../dto/upload-document.dto.js';
+import type { UploadVehiclePhotoDto } from '../dto/upload-vehicle-photo.dto.js';
+import {
+  documentFileType,
+  documentImageType,
+} from '../types/document-image.js';
 import type { PoolClient } from 'pg';
-import { DatabaseService } from '@app/core';
+import { DatabaseService, AppLogger } from '@app/core';
 import { DriverErrors } from '../../drivers/types/driver-errors.js';
-import { EDITABLE_DRIVER_PROFILE_STATUSES } from '../../drivers/types/driver.types.js';
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { ImageRepository } from '../repositories/image.repository.js';
 import { ImageKitService } from './imagekit.service.js';
 import { MediaErrors } from '../types/media-errors.js';
@@ -24,13 +39,171 @@ export class MediaService {
     private readonly vehicleRepository: VehicleRepository,
     private readonly vehicleDocumentRepository: VehicleDocumentRepository,
     private readonly databaseService: DatabaseService,
+    private readonly logger: AppLogger,
+    private readonly users: UserRepository,
+    private readonly verifications: DriverVerificationRepository,
+    private readonly cleanup: MediaCleanupService,
   ) {}
 
   getUploadAuth() {
     return this.imageKitService.getUploadAuth();
   }
 
+  async uploadVehiclePhoto(
+    userId: string,
+    vehicleId: string,
+    dto: UploadVehiclePhotoDto,
+  ) {
+    const data = Buffer.from(dto.content_base64, 'base64');
+    const kind = documentImageType(data);
+    await this.withEditableOwner(
+      userId,
+      'VEHICLE',
+      vehicleId,
+      async () => {},
+      dto.expected_revision,
+    );
+    const uploaded = await this.imageKitService.uploadVehiclePhoto(
+      data,
+      vehicleId,
+      kind.extension,
+    );
+    try {
+      return await this.withEditableOwner(
+        userId,
+        'VEHICLE',
+        vehicleId,
+        async (client) => {
+          const image = await this.imageRepository.create(
+            {
+              ownerType: 'VEHICLE',
+              ownerId: vehicleId,
+              imageType: 'PHOTO',
+              imagekitFileId: uploaded.fileId,
+              url: uploaded.url,
+              fileName: `vehicle.${kind.extension}`,
+              mimeType: kind.mime,
+            },
+            client,
+          );
+          await this.vehicleRepository.photoCorrected(vehicleId, client);
+          return { image: toImageResponse(image) };
+        },
+        dto.expected_revision,
+      );
+    } catch (error) {
+      await this.cleanup.discard(uploaded.fileId);
+      throw error;
+    }
+  }
+
+  async uploadDocument(userId: string, dto: UploadDocumentDto) {
+    const data = Buffer.from(dto.content_base64, 'base64');
+    const kind = documentFileType(data);
+    await this.withEditableOwner(
+      userId,
+      dto.owner_type,
+      dto.owner_id,
+      async () => {},
+      dto.expected_revision,
+    );
+    if (dto.owner_type === 'DRIVER_DOCUMENT') {
+      const doc = await this.documentRepository.findById(dto.owner_id);
+      if (doc?.document_type === 'AADHAAR' && dto.aadhaar_copy !== 'MASKED')
+        throw new BadRequestException('Confirm this is a masked Aadhaar copy');
+    }
+    const uploaded = await this.imageKitService.uploadPrivate(
+      data,
+      dto.owner_id,
+      kind.extension,
+    );
+    try {
+      return await this.withEditableOwner(
+        userId,
+        dto.owner_type,
+        dto.owner_id,
+        async (client) => {
+          const document = await this.documentForOwner(
+            dto.owner_type,
+            dto.owner_id,
+            client,
+          );
+          if (!document) throw MediaErrors.invalidOwner();
+          const previous = await this.imageRepository.listByOwner(
+            dto.owner_type,
+            dto.owner_id,
+            client,
+          );
+          const image = await this.imageRepository.create(
+            {
+              ownerType: dto.owner_type,
+              ownerId: dto.owner_id,
+              imageType: 'DOCUMENT',
+              imagekitFileId: uploaded.fileId,
+              url: uploaded.filePath,
+              fileName: `document.${kind.extension}`,
+              mimeType: kind.mime,
+            },
+            client,
+          );
+          await this.imageRepository.markPrivate(image.id, client);
+          const state = correctedState(
+            document,
+            document.document_number,
+            document.expiry_date,
+            true,
+          );
+          const params = {
+            id: dto.owner_id,
+            expectedRevision: dto.expected_revision,
+            documentNumber: document.document_number,
+            expiryDate: document.expiry_date,
+            status: state.status,
+            rejectionReason: state.rejectionReason,
+            correction: state.correction
+              ? JSON.stringify(state.correction)
+              : null,
+          };
+          const saved =
+            dto.owner_type === 'DRIVER_DOCUMENT'
+              ? await this.documentRepository.saveState(params, client)
+              : await this.vehicleDocumentRepository.saveState(params, client);
+          for (const old of previous) {
+            await this.imageRepository.deleteById(old.id, client);
+            await this.cleanup.enqueue(old.imagekit_file_id, client);
+          }
+          return {
+            image: toImageResponse(image),
+            document_revision: saved.revision,
+          };
+        },
+        dto.expected_revision,
+      );
+    } catch (error) {
+      await this.cleanup.discard(uploaded.fileId);
+      throw error;
+    }
+  }
+  async documentContent(userId: string, imageId: string) {
+    const image = await this.imageRepository.findById(imageId);
+    if (
+      !image ||
+      !['DRIVER_DOCUMENT', 'VEHICLE_DOCUMENT'].includes(image.owner_type) ||
+      !(await this.imageRepository.isPrivate(imageId))
+    )
+      throw MediaErrors.imageNotFound();
+    const user = await this.users.findById(userId);
+    if (user?.global_role !== 'Admin')
+      await this.assertOwnerAccess(userId, image.owner_type, image.owner_id);
+    const data = await this.imageKitService.privateContent(
+      image.imagekit_file_id,
+    );
+    const kind = documentFileType(data);
+    return { data, mime: kind.mime };
+  }
   async registerImage(userId: string, dto: RegisterImageDto) {
+    if (['DRIVER_DOCUMENT', 'VEHICLE_DOCUMENT'].includes(dto.owner_type))
+      throw new BadRequestException('Use the private document upload endpoint');
     return this.withEditableOwner(
       userId,
       dto.owner_type,
@@ -76,26 +249,32 @@ export class MediaService {
     return { images: images.map((row) => toImageResponse(row)) };
   }
 
-  async deleteImage(userId: string, imageId: string) {
+  async deleteImage(
+    userId: string,
+    imageId: string,
+    expectedRevision?: number,
+  ) {
     const image = await this.imageRepository.findById(imageId);
     if (!image) {
       throw MediaErrors.imageNotFound();
     }
 
+    if (['DRIVER_DOCUMENT', 'VEHICLE_DOCUMENT'].includes(image.owner_type))
+      throw new BadRequestException(
+        'Replace document images through the document upload endpoint',
+      );
     await this.withEditableOwner(
       userId,
       image.owner_type,
       image.owner_id,
       async (client) => {
         await this.imageRepository.deleteById(imageId, client);
+        await this.cleanup.enqueue(image.imagekit_file_id, client);
+        if (image.owner_type === 'VEHICLE')
+          await this.vehicleRepository.photoCorrected(image.owner_id, client);
       },
+      expectedRevision,
     );
-
-    try {
-      await this.imageKitService.deleteFile(image.imagekit_file_id);
-    } catch {
-      // Metadata cleanup still proceeds if ImageKit delete fails
-    }
 
     return { message: 'Image deleted successfully' };
   }
@@ -115,6 +294,7 @@ export class MediaService {
     ownerType: image_owner_type,
     ownerId: string,
     work: (client: PoolClient) => Promise<T>,
+    expectedRevision?: number,
   ) {
     return this.databaseService.withTransaction(async (client) => {
       if (ownerType !== 'USER') {
@@ -127,15 +307,57 @@ export class MediaService {
           profile.id,
           client,
         );
+        if (!locked || locked.status === 'SUSPENDED')
+          throw DriverErrors.profileNotEditable();
+        await this.assertOwnerAccess(userId, ownerType, ownerId, client);
+        const verification = await this.verifications.findLatestByProfileId(
+          locked.id,
+          client,
+        );
+        const status = applicationStatus(locked, verification);
         if (
-          !locked ||
-          !EDITABLE_DRIVER_PROFILE_STATUSES.includes(locked.status)
+          (await this.vehicleRepository.listByProfileId(locked.id, client))
+            .length > 1
         )
           throw DriverErrors.profileNotEditable();
+        if (
+          ownerType === 'DRIVER_DOCUMENT' ||
+          ownerType === 'VEHICLE_DOCUMENT'
+        ) {
+          const document = await this.documentForOwner(
+            ownerType,
+            ownerId,
+            client,
+          );
+          if (!document) throw MediaErrors.invalidOwner();
+          assertSelectedForCorrection(status, ownerId, verification);
+          assertDocumentEditable(status, document, expectedRevision, true);
+        } else if (ownerType === 'VEHICLE' && status !== 'DRAFT') {
+          if (status !== 'REJECTED') throw DriverErrors.profileNotEditable();
+          const vehicle = await this.vehicleRepository.findById(
+            ownerId,
+            client,
+          );
+          if (!vehicle) throw MediaErrors.invalidOwner();
+          if (vehicle.photos_review_status !== 'REJECTED')
+            throw DriverErrors.profileNotEditable();
+          assertVehicleCorrection(status, vehicle, 'PHOTOS', expectedRevision);
+        } else if (status !== 'DRAFT') throw DriverErrors.profileNotEditable();
+      } else {
+        await this.assertOwnerAccess(userId, ownerType, ownerId, client);
       }
-      await this.assertOwnerAccess(userId, ownerType, ownerId, client);
       return work(client);
     });
+  }
+
+  private documentForOwner(
+    ownerType: 'DRIVER_DOCUMENT' | 'VEHICLE_DOCUMENT',
+    ownerId: string,
+    client: PoolClient,
+  ) {
+    return ownerType === 'DRIVER_DOCUMENT'
+      ? this.documentRepository.findById(ownerId, client)
+      : this.vehicleDocumentRepository.findById(ownerId, client);
   }
 
   private async assertOwnerAccess(

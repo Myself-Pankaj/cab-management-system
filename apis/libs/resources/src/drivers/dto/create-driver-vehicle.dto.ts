@@ -15,6 +15,11 @@ import { VEHICLE_CATEGORIES } from '../../rides/dto/ride.dto.js';
 import type { vehicle_category } from '@db/queries/rides/vehicle_fare_rates.queries.js';
 
 export class CreateDriverVehicleDto {
+  @ApiPropertyOptional({ minimum: 0 })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  expected_revision?: number;
   @ApiProperty()
   @IsString()
   @MaxLength(30)

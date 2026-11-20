@@ -1,9 +1,6 @@
-import {
-  Injectable,
-  OnModuleDestroy,
-  OnModuleInit,
-} from '@nestjs/common';
+import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
+import { createHash } from 'node:crypto';
 import { AppConfigService } from '../config/config.service.js';
 import { DatabaseConfig } from '../config/config.interface.js';
 import { AppLogger } from '../logger/logger.service.js';
@@ -34,10 +31,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private isShuttingDown = false;
   private inFlightOperations = 0;
 
-  constructor(
-    appConfig: AppConfigService,
-    appLogger: AppLogger,
-  ) {
+  constructor(appConfig: AppConfigService, appLogger: AppLogger) {
     const config = appConfig.database;
     this.config = config;
     this.logger = appLogger.forContext('DatabaseService');
@@ -65,18 +59,13 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     });
 
     this.pool.on('error', (err) => {
-      this.logger.error(
-        `Unexpected error on idle Postgres client: ${err.message}`,
-        err,
-      );
+      this.logger.error('Unexpected error on idle Postgres client', err);
     });
 
     this.pool.on('connect', () =>
       this.logger.debug('New client connected to pool'),
     );
-    this.pool.on('remove', () =>
-      this.logger.debug('Client removed from pool'),
-    );
+    this.pool.on('remove', () => this.logger.debug('Client removed from pool'));
   }
 
   async onModuleInit(): Promise<void> {
@@ -164,9 +153,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const db = await this.healthCheck();
       return { ready: true, db, pool, saturated: false, shuttingDown: false };
     } catch (err) {
+      this.logger.error('Postgres readiness check failed', err as Error);
       return {
         ready: false,
-        db: { ok: false, error: (err as Error).message },
+        db: { ok: false, error: 'database_unavailable' },
         pool,
         saturated,
         shuttingDown,
@@ -191,7 +181,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       return result;
     } catch (err) {
       this.logger.error(
-        `Query failed after ${this.elapsedMs(start).toFixed(1)}ms: ${text}`,
+        `Query ${this.queryFingerprint(text)} failed after ${this.elapsedMs(start).toFixed(1)}ms`,
         err as Error,
       );
       throw err;
@@ -214,7 +204,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       try {
         return await this.runTransaction(work, options);
       } catch (err) {
-        const code = (err as PostgresErrorLike).code;
+        const code =
+          err && typeof err === 'object'
+            ? (err as PostgresErrorLike).code
+            : undefined;
         const isTransient =
           code !== undefined && TRANSIENT_TX_ERROR_CODES.has(code);
 
@@ -246,7 +239,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       await client.query(`RELEASE SAVEPOINT ${savepoint}`);
       return result;
     } catch (err) {
-      await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+      try {
+        await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+      } catch (rollbackError) {
+        this.logger.error('Savepoint rollback failed', rollbackError as Error);
+      }
       throw err;
     }
   }
@@ -256,11 +253,13 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     options: TransactionOptions,
   ): Promise<T> {
     this.inFlightOperations++;
-    const client = await this.pool.connect();
+    let client: PoolClient | undefined;
+    let discardClient = false;
     const start = process.hrtime.bigint();
     const txName = options.name ?? 'anonymous';
 
     try {
+      client = await this.pool.connect();
       await client.query(this.buildBeginStatement(options));
       const result = await work(client);
       await client.query('COMMIT');
@@ -269,14 +268,24 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       );
       return result;
     } catch (err) {
-      await client.query('ROLLBACK');
-      this.logger.warn(
-        `Transaction "${txName}" rolled back after ${this.elapsedMs(start).toFixed(1)}ms: ${(err as Error).message}`,
-      );
+      if (client) {
+        try {
+          await client.query('ROLLBACK');
+          this.logger.debug(
+            `Transaction "${txName}" rolled back after ${this.elapsedMs(start).toFixed(1)}ms`,
+          );
+        } catch (rollbackError) {
+          discardClient = true;
+          this.logger.error(
+            'Transaction rollback failed; discarding connection',
+            rollbackError as Error,
+          );
+        }
+      }
       throw err;
     } finally {
-      client.release();
       this.inFlightOperations--;
+      client?.release(discardClient);
     }
   }
 
@@ -309,7 +318,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         lastError = err as Error;
         if (attempt < startupRetries) {
           this.logger.warn(
-            `Postgres connection attempt ${attempt + 1} failed: ${lastError.message}. ` +
+            `Postgres connection attempt ${attempt + 1} failed. ` +
               `Retrying in ${startupRetryDelayMs}ms...`,
           );
           await this.sleep(startupRetryDelayMs);
@@ -318,7 +327,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
 
     throw new Error(
-      `Failed to connect to Postgres after ${startupRetries + 1} attempt(s): ${lastError?.message}`,
+      `Failed to connect to Postgres after ${startupRetries + 1} attempt(s)`,
+      { cause: lastError },
     );
   }
 
@@ -338,7 +348,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
   private logQuery(metrics: QueryMetrics): void {
     const { text, durationMs, rowCount } = metrics;
-    const message = `query="${this.truncate(text)}" duration=${durationMs.toFixed(1)}ms rows=${rowCount}`;
+    const message = `queryId=${this.queryFingerprint(text)} duration=${durationMs.toFixed(1)}ms rows=${rowCount}`;
 
     if (durationMs >= this.config.slowQueryMs) {
       this.logger.warn(`SLOW QUERY ${message}`);
@@ -347,7 +357,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private truncate(text: string, max = 120): string {
-    return text.length > max ? `${text.slice(0, max)}...` : text;
+  private queryFingerprint(text: string): string {
+    return createHash('sha256').update(text).digest('hex').slice(0, 16);
   }
 }

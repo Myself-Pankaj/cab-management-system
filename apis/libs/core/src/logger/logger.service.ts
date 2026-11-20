@@ -5,6 +5,8 @@ import {
 } from '@nestjs/common';
 import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston';
 import { Logger } from 'winston';
+import { requestContext } from './request-context.js';
+import { sanitizeLogValue } from './log-sanitizer.js';
 
 @Injectable()
 export class AppLogger implements NestLoggerService {
@@ -39,7 +41,10 @@ export class AppLogger implements NestLoggerService {
 
   log(message: string, context?: string) {
     const ctx = context || this.context || 'Application';
-    this.winstonLogger.info(message, { context: ctx });
+    this.winstonLogger.info(message, {
+      ...requestContext.getStore(),
+      context: ctx,
+    });
   }
 
   error(message: string, trace?: string | Error, context?: string) {
@@ -47,31 +52,41 @@ export class AppLogger implements NestLoggerService {
 
     if (trace instanceof Error) {
       this.winstonLogger.error(message, {
+        ...requestContext.getStore(),
         context: ctx,
-        trace: trace.stack,
-        error: {
-          name: trace.name,
-          message: trace.message,
-        },
+        error: sanitizeLogValue(trace),
       });
     } else {
-      this.winstonLogger.error(message, { context: ctx, trace });
+      this.winstonLogger.error(message, {
+        ...requestContext.getStore(),
+        context: ctx,
+        trace,
+      });
     }
   }
 
   warn(message: string, context?: string) {
     const ctx = context || this.context || 'Application';
-    this.winstonLogger.warn(message, { context: ctx });
+    this.winstonLogger.warn(message, {
+      ...requestContext.getStore(),
+      context: ctx,
+    });
   }
 
   debug(message: string, context?: string) {
     const ctx = context || this.context || 'Application';
-    this.winstonLogger.debug(message, { context: ctx });
+    this.winstonLogger.debug(message, {
+      ...requestContext.getStore(),
+      context: ctx,
+    });
   }
 
   verbose(message: string, context?: string) {
     const ctx = context || this.context || 'Application';
-    this.winstonLogger.verbose(message, { context: ctx });
+    this.winstonLogger.verbose(message, {
+      ...requestContext.getStore(),
+      context: ctx,
+    });
   }
 
   logWithMetadata(
@@ -80,7 +95,23 @@ export class AppLogger implements NestLoggerService {
     context?: string,
   ) {
     const ctx = context || this.context || 'Application';
-    this.winstonLogger.info(message, { context: ctx, ...metadata });
+    this.winstonLogger.info(message, {
+      ...metadata,
+      ...requestContext.getStore(),
+      context: ctx,
+    });
+  }
+
+  warnWithMetadata(
+    message: string,
+    metadata: Record<string, unknown>,
+    context?: string,
+  ) {
+    this.winstonLogger.warn(message, {
+      ...metadata,
+      ...requestContext.getStore(),
+      context: context || this.context || 'Application',
+    });
   }
 
   errorWithMetadata(
@@ -91,13 +122,10 @@ export class AppLogger implements NestLoggerService {
   ) {
     const ctx = context || this.context || 'Application';
     this.winstonLogger.error(message, {
-      context: ctx,
-      trace: error.stack,
-      error: {
-        name: error.name,
-        message: error.message,
-      },
       ...metadata,
+      ...requestContext.getStore(),
+      context: ctx,
+      error: sanitizeLogValue(error),
     });
   }
 }

@@ -14,6 +14,52 @@ import {
 
 @Injectable()
 export class DriverProfileRepository extends BaseRepository {
+  async audit(
+    profileId: string,
+    kind: 'PROFILE' | 'DRIVER_DOCUMENT' | 'VEHICLE_DOCUMENT',
+    documentId: string | null,
+    decision: string,
+    actorId: string,
+    reason: string | null,
+    client: PoolClient,
+    details: unknown = null,
+  ) {
+    await client.query(
+      'INSERT INTO driver_review_audit(driver_profile_id,document_kind,document_id,decision,reviewed_by,reason,details) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)',
+      [
+        profileId,
+        kind,
+        documentId,
+        decision,
+        actorId,
+        reason,
+        details === null ? null : JSON.stringify(details),
+      ],
+    );
+  }
+  async auditHistory(profileId: string) {
+    return (
+      await this.pool.query<{
+        id: string;
+        document_kind: string;
+        document_id: string | null;
+        decision: string;
+        reason: string | null;
+        reviewed_by: string;
+        created_at: Date;
+      }>(
+        'SELECT * FROM driver_review_audit WHERE driver_profile_id=$1 ORDER BY created_at DESC',
+        [profileId],
+      )
+    ).rows;
+  }
+  async listAll() {
+    return (
+      await this.pool.query<IGetDriverProfileByIdResult>(
+        'SELECT * FROM driver_profiles ORDER BY created_at DESC LIMIT 500',
+      )
+    ).rows;
+  }
   async lockById(
     id: string,
     client: PoolClient,

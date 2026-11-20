@@ -75,7 +75,7 @@ export class AuthVerificationService {
     await this.databaseService.withTransaction(async (client) => {
       await this.verificationRepository.markUsed(String(verification.id), client);
       await this.userRepository.markEmailVerified(user.id, client);
-    });
+    }, { name: 'verify-otp' });
 
     user.email_verified = true;
     return { user: toUserResponse(user) };

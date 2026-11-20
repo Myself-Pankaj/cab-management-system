@@ -110,7 +110,8 @@ export class DriversController {
   @Post('documents')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
-    summary: 'Create driver document record (attach image via /media)',
+    summary:
+      'Create driver document record (upload private image via /media/documents/upload)',
   })
   @ApiEnvelope(DocumentCreatedDto, 201)
   addDocument(
@@ -165,7 +166,8 @@ export class DriversController {
   @Post('vehicles/:vehicleId/documents')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
-    summary: 'Create vehicle document record (attach image via /media)',
+    summary:
+      'Create vehicle document record (upload private image via /media/documents/upload)',
   })
   @ApiEnvelope(VehicleDocumentCreatedDto, 201)
   addVehicleDocument(

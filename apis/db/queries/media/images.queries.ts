@@ -99,7 +99,7 @@ export interface IListImagesByOwnerQuery {
   result: IListImagesByOwnerResult;
 }
 
-const listImagesByOwnerIR: any = {"usedParamSet":{"ownerType":true,"ownerId":true},"params":[{"name":"ownerType","required":true,"transform":{"type":"scalar"},"locs":[{"a":184,"b":194}]},{"name":"ownerId","required":true,"transform":{"type":"scalar"},"locs":[{"a":231,"b":239}]}],"statement":"SELECT\n    id,\n    owner_type,\n    owner_id,\n    image_type,\n    imagekit_file_id,\n    url,\n    file_name,\n    mime_type,\n    created_at,\n    updated_at\nFROM images\nWHERE owner_type = :ownerType!::image_owner_type\n  AND owner_id = :ownerId!::uuid\nORDER BY created_at DESC"};
+const listImagesByOwnerIR: any = {"usedParamSet":{"ownerType":true,"ownerId":true},"params":[{"name":"ownerType","required":true,"transform":{"type":"scalar"},"locs":[{"a":184,"b":194}]},{"name":"ownerId","required":true,"transform":{"type":"scalar"},"locs":[{"a":231,"b":239}]}],"statement":"SELECT\n    id,\n    owner_type,\n    owner_id,\n    image_type,\n    imagekit_file_id,\n    url,\n    file_name,\n    mime_type,\n    created_at,\n    updated_at\nFROM images\nWHERE owner_type = :ownerType!::image_owner_type\n  AND owner_id = :ownerId!::uuid\n  AND (owner_type NOT IN ('DRIVER_DOCUMENT','VEHICLE_DOCUMENT') OR document_private)\nORDER BY created_at DESC"};
 
 /**
  * Query generated from SQL:
@@ -118,6 +118,7 @@ const listImagesByOwnerIR: any = {"usedParamSet":{"ownerType":true,"ownerId":tru
  * FROM images
  * WHERE owner_type = :ownerType!::image_owner_type
  *   AND owner_id = :ownerId!::uuid
+ *   AND (owner_type NOT IN ('DRIVER_DOCUMENT','VEHICLE_DOCUMENT') OR document_private)
  * ORDER BY created_at DESC
  * ```
  */
@@ -238,7 +239,7 @@ export interface ICountImagesByOwnerQuery {
   result: ICountImagesByOwnerResult;
 }
 
-const countImagesByOwnerIR: any = {"usedParamSet":{"ownerType":true,"ownerId":true},"params":[{"name":"ownerType","required":true,"transform":{"type":"scalar"},"locs":[{"a":64,"b":74}]},{"name":"ownerId","required":true,"transform":{"type":"scalar"},"locs":[{"a":111,"b":119}]}],"statement":"SELECT COUNT(*)::int AS \"count!\"\nFROM images\nWHERE owner_type = :ownerType!::image_owner_type\n  AND owner_id = :ownerId!::uuid"};
+const countImagesByOwnerIR: any = {"usedParamSet":{"ownerType":true,"ownerId":true},"params":[{"name":"ownerType","required":true,"transform":{"type":"scalar"},"locs":[{"a":64,"b":74}]},{"name":"ownerId","required":true,"transform":{"type":"scalar"},"locs":[{"a":111,"b":119}]}],"statement":"SELECT COUNT(*)::int AS \"count!\"\nFROM images\nWHERE owner_type = :ownerType!::image_owner_type\n  AND owner_id = :ownerId!::uuid\n  AND (owner_type NOT IN ('DRIVER_DOCUMENT','VEHICLE_DOCUMENT') OR document_private)"};
 
 /**
  * Query generated from SQL:
@@ -247,6 +248,7 @@ const countImagesByOwnerIR: any = {"usedParamSet":{"ownerType":true,"ownerId":tr
  * FROM images
  * WHERE owner_type = :ownerType!::image_owner_type
  *   AND owner_id = :ownerId!::uuid
+ *   AND (owner_type NOT IN ('DRIVER_DOCUMENT','VEHICLE_DOCUMENT') OR document_private)
  * ```
  */
 export const countImagesByOwner = new PreparedQuery<ICountImagesByOwnerParams,ICountImagesByOwnerResult>(countImagesByOwnerIR);
@@ -270,7 +272,7 @@ export interface ICountImagesByOwnerAndTypeQuery {
   result: ICountImagesByOwnerAndTypeResult;
 }
 
-const countImagesByOwnerAndTypeIR: any = {"usedParamSet":{"ownerType":true,"ownerId":true,"imageType":true},"params":[{"name":"ownerType","required":true,"transform":{"type":"scalar"},"locs":[{"a":64,"b":74}]},{"name":"ownerId","required":true,"transform":{"type":"scalar"},"locs":[{"a":111,"b":119}]},{"name":"imageType","required":true,"transform":{"type":"scalar"},"locs":[{"a":146,"b":156}]}],"statement":"SELECT COUNT(*)::int AS \"count!\"\nFROM images\nWHERE owner_type = :ownerType!::image_owner_type\n  AND owner_id = :ownerId!::uuid\n  AND image_type = :imageType!"};
+const countImagesByOwnerAndTypeIR: any = {"usedParamSet":{"ownerType":true,"ownerId":true,"imageType":true},"params":[{"name":"ownerType","required":true,"transform":{"type":"scalar"},"locs":[{"a":64,"b":74}]},{"name":"ownerId","required":true,"transform":{"type":"scalar"},"locs":[{"a":111,"b":119}]},{"name":"imageType","required":true,"transform":{"type":"scalar"},"locs":[{"a":231,"b":241}]}],"statement":"SELECT COUNT(*)::int AS \"count!\"\nFROM images\nWHERE owner_type = :ownerType!::image_owner_type\n  AND owner_id = :ownerId!::uuid\n  AND (owner_type NOT IN ('DRIVER_DOCUMENT','VEHICLE_DOCUMENT') OR document_private)\n  AND image_type = :imageType!"};
 
 /**
  * Query generated from SQL:
@@ -279,6 +281,7 @@ const countImagesByOwnerAndTypeIR: any = {"usedParamSet":{"ownerType":true,"owne
  * FROM images
  * WHERE owner_type = :ownerType!::image_owner_type
  *   AND owner_id = :ownerId!::uuid
+ *   AND (owner_type NOT IN ('DRIVER_DOCUMENT','VEHICLE_DOCUMENT') OR document_private)
  *   AND image_type = :imageType!
  * ```
  */

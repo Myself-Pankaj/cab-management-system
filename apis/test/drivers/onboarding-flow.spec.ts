@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Test } from '@nestjs/testing';
 import { ValidationPipe, type INestApplication } from '@nestjs/common';
@@ -6,6 +7,7 @@ import { DriversController } from '../../src/drivers/drivers.controller.js';
 import { AdminDriversController } from '../../src/admin/admin-drivers.controller.js';
 import { DriverOnboardingService } from '../../libs/resources/src/drivers/services/driver-onboarding.service.js';
 import { AdminDriverService } from '../../libs/resources/src/drivers/services/admin-driver.service.js';
+import { AdminReportingService } from '../../libs/resources/src/admin/admin-reporting.service.js';
 import { onboardingFixture } from './onboarding.fixture.js';
 
 describe('Driver onboarding HTTP flow', () => {
@@ -43,6 +45,7 @@ describe('Driver onboarding HTTP flow', () => {
       providers: [
         { provide: DriverOnboardingService, useValue: f.service },
         { provide: AdminDriverService, useValue: admin },
+        { provide: AdminReportingService, useValue: { applications: vi.fn() } },
       ],
     }).compile();
     app = module.createNestApplication();
@@ -95,12 +98,25 @@ describe('Driver onboarding HTTP flow', () => {
     await request(app.getHttpServer())
       .post('/api/v1/admin/drivers/profile-1/review')
       .set('x-test-role', 'Driver')
-      .send({ decision: 'APPROVED' })
+      .send({
+        operation_id: randomUUID(),
+        reason: 'Reviewed required documents',
+        decision: 'APPROVED',
+      })
       .expect(403);
+    f.vehicle.details_review_status = 'APPROVED';
+    f.vehicle.photos_review_status = 'APPROVED';
+    [...f.driverDocuments, ...f.vehicleDocuments].forEach((d) => {
+      d.status = 'APPROVED';
+    });
     await request(app.getHttpServer())
       .post('/api/v1/admin/drivers/profile-1/review')
       .set('x-test-role', 'Admin')
-      .send({ decision: 'APPROVED' })
+      .send({
+        operation_id: randomUUID(),
+        reason: 'Reviewed required documents',
+        decision: 'APPROVED',
+      })
       .expect(200);
     const profile = await request(app.getHttpServer())
       .get('/api/v1/drivers/me/profile')

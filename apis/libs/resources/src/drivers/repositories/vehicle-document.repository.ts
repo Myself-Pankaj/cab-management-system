@@ -1,8 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import type { PoolClient } from 'pg';
 import { BaseRepository } from '@app/core';
 import {
   createVehicleDocument,
+  saveVehicleDocumentState,
   getVehicleDocumentById,
   listVehicleDocumentsByVehicleId,
   updateVehicleDocumentReview,
@@ -12,20 +13,14 @@ import {
 
 @Injectable()
 export class VehicleDocumentRepository extends BaseRepository {
-  async updateDetails(
-    id: string,
-    documentNumber: string | null,
-    expiryDate: Date | null,
+  async saveState(
+    params: Parameters<typeof saveVehicleDocumentState.run>[0],
     client: PoolClient,
   ) {
-    const result = await client.query<
-      NonNullable<Awaited<ReturnType<VehicleDocumentRepository['findById']>>>
-    >(
-      `UPDATE vehicle_documents SET document_number = $2, expiry_date = $3, status = 'PENDING',
-       rejection_reason = NULL, reviewed_at = NULL WHERE id = $1 RETURNING *`,
-      [id, documentNumber, expiryDate],
-    );
-    return result.rows[0]!;
+    const [row] = await saveVehicleDocumentState.run(params, client);
+    if (!row)
+      throw new ConflictException('Document changed. Refresh and retry.');
+    return row;
   }
 
   async create(params: ICreateVehicleDocumentParams, client?: PoolClient) {
@@ -53,10 +48,11 @@ export class VehicleDocumentRepository extends BaseRepository {
     status: review_status,
     rejectionReason: string | null,
     client?: PoolClient,
+    correction: string | null = null,
   ) {
     const connection = client ?? this.pool;
     const [row] = await updateVehicleDocumentReview.run(
-      { id, status, rejectionReason },
+      { id, status, rejectionReason, correction },
       connection,
     );
     return row ?? null;

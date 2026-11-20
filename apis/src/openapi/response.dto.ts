@@ -172,7 +172,32 @@ export class DriverProfileDataDto {
   profile!: DriverProfileResponseDto;
 }
 
-export class DocumentResponseDto {
+export class CorrectionBaselineDto {
+  @ApiProperty({ type: String, nullable: true }) document_number!:
+    string | null;
+  @ApiProperty({ type: String, nullable: true, format: 'date' }) expiry_date!:
+    string | null;
+}
+export class DocumentCorrectionDto {
+  @ApiProperty({ enum: ['IMAGE', 'METADATA', 'BOTH'] }) mode!:
+    'IMAGE' | 'METADATA' | 'BOTH';
+  @ApiProperty({ enum: ['document_number', 'expiry_date'], isArray: true })
+  fields!: ('document_number' | 'expiry_date')[];
+  @ApiProperty({ type: () => CorrectionBaselineDto })
+  baseline!: CorrectionBaselineDto;
+  @ApiProperty() image_completed!: boolean;
+}
+export class DocumentStateDto {
+  @ApiProperty({ minimum: 0 }) revision!: number;
+  @ApiProperty({ type: () => DocumentCorrectionDto, nullable: true })
+  correction!: DocumentCorrectionDto | null;
+}
+export class DocumentUploadDataDto extends ImageDataDto {
+  @ApiProperty({ minimum: 0 }) document_revision!: number;
+}
+export class DocumentResponseDto extends DocumentStateDto {
+  @ApiProperty({ type: String, nullable: true, format: 'date' }) expiry_date!:
+    string | null;
   @ApiProperty({ type: 'string' })
   id!: string;
   @ApiProperty({ type: 'string' })
@@ -195,7 +220,9 @@ export class DocumentResponseDto {
   reviewed_at!: string | null;
 }
 
-export class DocumentWithImagesDto {
+export class DocumentWithImagesDto extends DocumentStateDto {
+  @ApiProperty({ type: String, nullable: true, format: 'date' }) expiry_date!:
+    string | null;
   @ApiProperty({ type: 'string' })
   id!: string;
   @ApiProperty({ type: 'string' })
@@ -335,7 +362,7 @@ export class VehiclesDataDto {
   vehicles!: VehicleWithImagesDto[];
 }
 
-export class VehicleDocumentResponseDto {
+export class VehicleDocumentResponseDto extends DocumentStateDto {
   @ApiProperty({ type: 'string' })
   id!: string;
   @ApiProperty({ type: 'string' })
@@ -382,6 +409,11 @@ export class DriverSubmittedDto {
 }
 
 export class PendingDriverDto {
+  @ApiProperty({
+    enum: ['DRAFT', 'PENDING_VERIFICATION', 'APPROVED', 'REJECTED'],
+  })
+  application_status!:
+    'DRAFT' | 'PENDING_VERIFICATION' | 'APPROVED' | 'REJECTED';
   @ApiProperty({ type: () => DriverProfileResponseDto })
   profile!: DriverProfileResponseDto;
   @ApiProperty({ nullable: true, type: () => UserResponseDto })
@@ -393,7 +425,9 @@ export class PendingDriversDto {
   drivers!: PendingDriverDto[];
 }
 
-export class AdminDocumentDto {
+export class AdminDocumentDto extends DocumentStateDto {
+  @ApiProperty({ type: String, nullable: true, format: 'date' }) expiry_date!:
+    string | null;
   @ApiProperty({ type: 'string' })
   id!: string;
   @ApiProperty({
@@ -416,7 +450,7 @@ export class AdminDocumentDto {
   images!: ImageResponseDto[];
 }
 
-export class AdminVehicleDocumentDto {
+export class AdminVehicleDocumentDto extends DocumentStateDto {
   @ApiProperty({ type: 'string' })
   id!: string;
   @ApiProperty({ type: 'string' })
@@ -438,6 +472,16 @@ export class AdminVehicleDocumentDto {
 }
 
 export class AdminVehicleDto {
+  @ApiProperty({ enum: ['PENDING', 'APPROVED', 'REJECTED'] })
+  details_review_status!: 'PENDING' | 'APPROVED' | 'REJECTED';
+  @ApiProperty({ enum: ['PENDING', 'APPROVED', 'REJECTED'] })
+  photos_review_status!: 'PENDING' | 'APPROVED' | 'REJECTED';
+  @ApiProperty({ type: String, nullable: true }) details_rejection_reason!:
+    string | null;
+  @ApiProperty({ type: String, nullable: true }) photos_rejection_reason!:
+    string | null;
+  @ApiProperty() photos_correction_completed!: boolean;
+  @ApiProperty() review_revision!: number;
   @ApiProperty({ type: 'string' })
   id!: string;
   @ApiProperty({ type: 'string' })
@@ -487,7 +531,45 @@ export class AdminBankAccountDto {
   is_verified!: boolean;
 }
 
+export class DocumentAuditValuesDto {
+  @ApiProperty({ type: String, nullable: true }) document_number!:
+    string | null;
+  @ApiProperty({ type: String, nullable: true }) expiry_date!: string | null;
+}
+export class DriverReviewAuditDetailsDto {
+  @ApiPropertyOptional({ type: () => DocumentAuditValuesDto })
+  before?: DocumentAuditValuesDto;
+  @ApiPropertyOptional({ type: () => DocumentAuditValuesDto })
+  after?: DocumentAuditValuesDto;
+  @ApiPropertyOptional() previous_revision?: number;
+  @ApiPropertyOptional() revision?: number;
+  @ApiPropertyOptional() mode?: string;
+  @ApiPropertyOptional({ type: String, isArray: true }) fields?: string[];
+  @ApiPropertyOptional({ type: () => DocumentAuditValuesDto })
+  baseline?: DocumentAuditValuesDto;
+  @ApiPropertyOptional() image_completed?: boolean;
+}
+export class DriverReviewAuditDto {
+  @ApiProperty({ type: () => DriverReviewAuditDetailsDto, nullable: true })
+  details!: DriverReviewAuditDetailsDto | null;
+  @ApiProperty() id!: string;
+  @ApiProperty() document_kind!: string;
+  @ApiProperty({ nullable: true, type: String }) document_id!: string | null;
+  @ApiProperty() decision!: string;
+  @ApiProperty({ nullable: true, type: String }) reason!: string | null;
+  @ApiProperty() reviewed_by!: string;
+  @ApiProperty({ format: 'date-time' }) created_at!: string;
+}
 export class AdminDriverDetailDto {
+  @ApiProperty() compliance_approved!: boolean;
+  @ApiProperty() ride_eligible!: boolean;
+  @ApiProperty({
+    enum: ['DRAFT', 'PENDING_VERIFICATION', 'APPROVED', 'REJECTED'],
+  })
+  application_status!:
+    'DRAFT' | 'PENDING_VERIFICATION' | 'APPROVED' | 'REJECTED';
+  @ApiProperty({ type: () => DriverReviewAuditDto, isArray: true })
+  audit!: DriverReviewAuditDto[];
   @ApiProperty({ type: () => DriverProfileResponseDto })
   profile!: DriverProfileResponseDto;
   @ApiProperty({ nullable: true, type: () => UserResponseDto })
@@ -518,12 +600,22 @@ export class DriverReviewedDto {
   verification!: ReviewResultDto | null;
 }
 
+export class DocumentReviewResultDto extends ReviewResultDto {
+  @ApiProperty() revision!: number;
+  @ApiProperty({ type: () => DocumentCorrectionDto, nullable: true })
+  correction!: DocumentCorrectionDto | null;
+}
 export class DocumentReviewedDto {
-  @ApiProperty({ nullable: true, type: () => ReviewResultDto })
-  document!: ReviewResultDto | null;
+  @ApiProperty({ nullable: true, type: () => DocumentReviewResultDto })
+  document!: DocumentReviewResultDto | null;
 }
 
 export class VehicleCategoryResponseDto {
+  @ApiProperty() description!: string;
+  @ApiProperty({ type: 'string', nullable: true }) image_url!: string | null;
+  @ApiProperty() bag_capacity!: number;
+  @ApiProperty() is_active!: boolean;
+
   @ApiProperty({
     type: 'string',
     enum: ['SEATER_4', 'SEATER_5', 'SEATER_7', 'SEATER_12'],
@@ -589,6 +681,10 @@ export class RideQuoteResponseDto {
 }
 
 export class RideResponseDto {
+  @ApiProperty() bag_count!: number;
+  @ApiProperty({ type: 'string', nullable: true }) special_requests!:
+    string | null;
+
   @ApiProperty({ type: 'string' })
   id!: string;
   @ApiProperty({ type: 'string' })
@@ -678,6 +774,18 @@ export class RideResponseDto {
 export class RidesDataDto {
   @ApiProperty({ type: () => RideResponseDto, isArray: true })
   rides!: RideResponseDto[];
+}
+
+export class PassengerRideCountsDto {
+  @ApiProperty() upcoming!: number;
+  @ApiProperty() completed!: number;
+}
+export class PassengerRidesDataDto extends RidesDataDto {
+  @ApiProperty() total!: number;
+  @ApiProperty() limit!: number;
+  @ApiProperty() offset!: number;
+  @ApiProperty({ type: () => PassengerRideCountsDto })
+  counts!: PassengerRideCountsDto;
 }
 
 export class RidePassengerResponseDto {
@@ -890,11 +998,11 @@ export class ReadinessDto {
 
 export class OnboardingChecklistDto {
   @ApiProperty({ type: 'boolean' })
-  aadhaar!: boolean;
+  vehicle_photo!: boolean;
+  @ApiProperty({ type: 'boolean' })
+  insurance!: boolean;
   @ApiProperty({ type: 'boolean' })
   driving_licence!: boolean;
-  @ApiProperty({ type: 'boolean' })
-  bank_details!: boolean;
   @ApiProperty({ type: 'boolean' })
   vehicle!: boolean;
   @ApiProperty({ type: 'boolean' })
@@ -904,11 +1012,25 @@ export class OnboardingChecklistDto {
 }
 
 export class OnboardingVerificationDto extends ReviewResultDto {
+  @ApiProperty({ type: String, isArray: true, format: 'uuid' })
+  correction_document_ids!: string[];
   @ApiProperty({ type: 'string', format: 'date-time' })
   submitted_at!: string;
 }
 
 export class DriverOnboardingDataDto {
+  @ApiProperty() can_edit_vehicle_photos!: boolean;
+  @ApiProperty() can_edit_vehicle!: boolean;
+  @ApiProperty() can_submit!: boolean;
+  @ApiProperty() ride_eligible!: boolean;
+  @ApiProperty({ type: String, nullable: true }) ride_eligibility_reason!:
+    string | null;
+
+  @ApiProperty({
+    enum: ['DRAFT', 'PENDING_VERIFICATION', 'APPROVED', 'REJECTED'],
+  })
+  application_status!:
+    'DRAFT' | 'PENDING_VERIFICATION' | 'APPROVED' | 'REJECTED';
   @ApiProperty({ type: () => DriverProfileResponseDto })
   profile!: DriverProfileResponseDto;
   @ApiProperty({ type: () => OnboardingVerificationDto, nullable: true })
@@ -923,4 +1045,18 @@ export class DriverOnboardingDataDto {
   checklist!: OnboardingChecklistDto;
   @ApiProperty({ type: 'boolean' })
   complete!: boolean;
+}
+
+export class CabEstimateDto extends VehicleCategoryResponseDto {
+  @ApiProperty({ type: () => FareBreakdownDto })
+  fare_breakdown!: FareBreakdownDto;
+}
+export class RideEstimatesResponseDto {
+  @ApiProperty() distance_km!: number;
+  @ApiProperty() estimated_duration_minutes!: number;
+  @ApiPropertyOptional() route_geometry?: string;
+  @ApiProperty() online_payment_available!: boolean;
+  @ApiProperty() partial_advance_percent!: number;
+  @ApiProperty({ type: () => CabEstimateDto, isArray: true })
+  categories!: CabEstimateDto[];
 }

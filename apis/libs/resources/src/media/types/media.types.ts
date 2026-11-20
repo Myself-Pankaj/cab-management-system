@@ -20,7 +20,9 @@ export function toImageResponse(row: IGetImageByIdResult): ImageResponse {
     owner_id: row.owner_id,
     image_type: row.image_type,
     imagekit_file_id: row.imagekit_file_id,
-    url: row.url,
+    url: ['DRIVER_DOCUMENT', 'VEHICLE_DOCUMENT'].includes(row.owner_type)
+      ? `/api/v1/media/documents/${row.id}/content`
+      : row.url,
     file_name: row.file_name,
     mime_type: row.mime_type,
     created_at: row.created_at.toISOString(),

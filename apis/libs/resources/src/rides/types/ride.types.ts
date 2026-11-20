@@ -65,6 +65,8 @@ export function toRideResponse(row: IGetRideByIdResult) {
     vehicle_id: row.vehicle_id,
     requested_vehicle_category: row.requested_vehicle_category,
     passenger_count: row.passenger_count,
+    bag_count: row.bag_count,
+    special_requests: row.special_requests,
     trip_type: row.trip_type,
     pickup_address: row.pickup_address,
     pickup_exact_location: row.pickup_exact_location,
@@ -105,10 +107,10 @@ export function toStatusHistoryResponse(row: IListRideStatusHistoryResult) {
 
 export const RIDE_STATUS_TRANSITIONS: Record<string, string[]> = {
   PENDING_PAYMENT: ['PENDING_ASSIGNMENT', 'PAYMENT_FAILED', 'CANCELLED'],
-  PAYMENT_FAILED: ['PENDING_PAYMENT', 'CANCELLED'],
+  PAYMENT_FAILED: ['PENDING_PAYMENT', 'PENDING_ASSIGNMENT', 'CANCELLED'],
   PENDING_ASSIGNMENT: ['DRIVER_ASSIGNED', 'CANCELLED'],
-  DRIVER_ASSIGNED: ['CONFIRMED', 'CANCELLED'],
-  CONFIRMED: ['IN_PROGRESS', 'CANCELLED'],
+  DRIVER_ASSIGNED: ['CONFIRMED', 'PENDING_ASSIGNMENT', 'CANCELLED'],
+  CONFIRMED: ['IN_PROGRESS', 'PENDING_ASSIGNMENT', 'CANCELLED'],
   IN_PROGRESS: ['COMPLETED', 'CANCELLED'],
   COMPLETED: [],
   CANCELLED: [],

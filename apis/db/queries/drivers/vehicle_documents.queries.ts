@@ -7,6 +7,8 @@ export type vehicle_document_type = 'INSURANCE' | 'OTHER' | 'PERMIT' | 'PUC' | '
 
 export type DateOrString = Date | string;
 
+export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
+
 /** 'CreateVehicleDocument' parameters type */
 export interface ICreateVehicleDocumentParams {
   documentNumber?: string | null | void;
@@ -18,12 +20,14 @@ export interface ICreateVehicleDocumentParams {
 
 /** 'CreateVehicleDocument' return type */
 export interface ICreateVehicleDocumentResult {
+  correction: Json | null;
   document_number: string | null;
   document_type: vehicle_document_type;
   expiry_date: Date | null;
   id: string;
   rejection_reason: string | null;
   reviewed_at: Date | null;
+  revision: number;
   status: review_status;
   uploaded_at: Date;
   vehicle_id: string;
@@ -35,7 +39,7 @@ export interface ICreateVehicleDocumentQuery {
   result: ICreateVehicleDocumentResult;
 }
 
-const createVehicleDocumentIR: any = {"usedParamSet":{"vehicleId":true,"documentType":true,"documentNumber":true,"expiryDate":true,"status":true},"params":[{"name":"vehicleId","required":true,"transform":{"type":"scalar"},"locs":[{"a":131,"b":141}]},{"name":"documentType","required":true,"transform":{"type":"scalar"},"locs":[{"a":154,"b":167}]},{"name":"documentNumber","required":false,"transform":{"type":"scalar"},"locs":[{"a":197,"b":211}]},{"name":"expiryDate","required":false,"transform":{"type":"scalar"},"locs":[{"a":218,"b":228}]},{"name":"status","required":false,"transform":{"type":"scalar"},"locs":[{"a":244,"b":250}]}],"statement":"INSERT INTO vehicle_documents (\n    vehicle_id,\n    document_type,\n    document_number,\n    expiry_date,\n    status\n)\nVALUES (\n    :vehicleId!::uuid,\n    :documentType!::vehicle_document_type,\n    :documentNumber,\n    :expiryDate,\n    COALESCE(:status::review_status, 'PENDING'::review_status)\n)\nRETURNING\n    id,\n    vehicle_id,\n    document_type,\n    document_number,\n    expiry_date,\n    status,\n    rejection_reason,\n    uploaded_at,\n    reviewed_at"};
+const createVehicleDocumentIR: any = {"usedParamSet":{"vehicleId":true,"documentType":true,"documentNumber":true,"expiryDate":true,"status":true},"params":[{"name":"vehicleId","required":true,"transform":{"type":"scalar"},"locs":[{"a":131,"b":141}]},{"name":"documentType","required":true,"transform":{"type":"scalar"},"locs":[{"a":154,"b":167}]},{"name":"documentNumber","required":false,"transform":{"type":"scalar"},"locs":[{"a":197,"b":211}]},{"name":"expiryDate","required":false,"transform":{"type":"scalar"},"locs":[{"a":218,"b":228}]},{"name":"status","required":false,"transform":{"type":"scalar"},"locs":[{"a":244,"b":250}]}],"statement":"INSERT INTO vehicle_documents (\n    vehicle_id,\n    document_type,\n    document_number,\n    expiry_date,\n    status\n)\nVALUES (\n    :vehicleId!::uuid,\n    :documentType!::vehicle_document_type,\n    :documentNumber,\n    :expiryDate,\n    COALESCE(:status::review_status, 'PENDING'::review_status)\n)\nRETURNING\n    id,\n    vehicle_id,\n    document_type,\n    document_number,\n    expiry_date,\n    status,\n    rejection_reason,\n    uploaded_at,\n    reviewed_at,\n    revision,\n    correction"};
 
 /**
  * Query generated from SQL:
@@ -63,7 +67,9 @@ const createVehicleDocumentIR: any = {"usedParamSet":{"vehicleId":true,"document
  *     status,
  *     rejection_reason,
  *     uploaded_at,
- *     reviewed_at
+ *     reviewed_at,
+ *     revision,
+ *     correction
  * ```
  */
 export const createVehicleDocument = new PreparedQuery<ICreateVehicleDocumentParams,ICreateVehicleDocumentResult>(createVehicleDocumentIR);
@@ -76,12 +82,14 @@ export interface IListVehicleDocumentsByVehicleIdParams {
 
 /** 'ListVehicleDocumentsByVehicleId' return type */
 export interface IListVehicleDocumentsByVehicleIdResult {
+  correction: Json | null;
   document_number: string | null;
   document_type: vehicle_document_type;
   expiry_date: Date | null;
   id: string;
   rejection_reason: string | null;
   reviewed_at: Date | null;
+  revision: number;
   status: review_status;
   uploaded_at: Date;
   vehicle_id: string;
@@ -93,7 +101,7 @@ export interface IListVehicleDocumentsByVehicleIdQuery {
   result: IListVehicleDocumentsByVehicleIdResult;
 }
 
-const listVehicleDocumentsByVehicleIdIR: any = {"usedParamSet":{"vehicleId":true},"params":[{"name":"vehicleId","required":true,"transform":{"type":"scalar"},"locs":[{"a":197,"b":207}]}],"statement":"SELECT\n    id,\n    vehicle_id,\n    document_type,\n    document_number,\n    expiry_date,\n    status,\n    rejection_reason,\n    uploaded_at,\n    reviewed_at\nFROM vehicle_documents\nWHERE vehicle_id = :vehicleId!::uuid\nORDER BY uploaded_at DESC"};
+const listVehicleDocumentsByVehicleIdIR: any = {"usedParamSet":{"vehicleId":true},"params":[{"name":"vehicleId","required":true,"transform":{"type":"scalar"},"locs":[{"a":227,"b":237}]}],"statement":"SELECT\n    id,\n    vehicle_id,\n    document_type,\n    document_number,\n    expiry_date,\n    status,\n    rejection_reason,\n    uploaded_at,\n    reviewed_at,\n    revision,\n    correction\nFROM vehicle_documents\nWHERE vehicle_id = :vehicleId!::uuid\nORDER BY uploaded_at DESC"};
 
 /**
  * Query generated from SQL:
@@ -107,7 +115,9 @@ const listVehicleDocumentsByVehicleIdIR: any = {"usedParamSet":{"vehicleId":true
  *     status,
  *     rejection_reason,
  *     uploaded_at,
- *     reviewed_at
+ *     reviewed_at,
+ *     revision,
+ *     correction
  * FROM vehicle_documents
  * WHERE vehicle_id = :vehicleId!::uuid
  * ORDER BY uploaded_at DESC
@@ -123,12 +133,14 @@ export interface IGetVehicleDocumentByIdParams {
 
 /** 'GetVehicleDocumentById' return type */
 export interface IGetVehicleDocumentByIdResult {
+  correction: Json | null;
   document_number: string | null;
   document_type: vehicle_document_type;
   expiry_date: Date | null;
   id: string;
   rejection_reason: string | null;
   reviewed_at: Date | null;
+  revision: number;
   status: review_status;
   uploaded_at: Date;
   vehicle_id: string;
@@ -140,7 +152,7 @@ export interface IGetVehicleDocumentByIdQuery {
   result: IGetVehicleDocumentByIdResult;
 }
 
-const getVehicleDocumentByIdIR: any = {"usedParamSet":{"id":true},"params":[{"name":"id","required":true,"transform":{"type":"scalar"},"locs":[{"a":189,"b":192}]}],"statement":"SELECT\n    id,\n    vehicle_id,\n    document_type,\n    document_number,\n    expiry_date,\n    status,\n    rejection_reason,\n    uploaded_at,\n    reviewed_at\nFROM vehicle_documents\nWHERE id = :id!::uuid\nLIMIT 1"};
+const getVehicleDocumentByIdIR: any = {"usedParamSet":{"id":true},"params":[{"name":"id","required":true,"transform":{"type":"scalar"},"locs":[{"a":219,"b":222}]}],"statement":"SELECT\n    id,\n    vehicle_id,\n    document_type,\n    document_number,\n    expiry_date,\n    status,\n    rejection_reason,\n    uploaded_at,\n    reviewed_at,\n    revision,\n    correction\nFROM vehicle_documents\nWHERE id = :id!::uuid\nLIMIT 1"};
 
 /**
  * Query generated from SQL:
@@ -154,7 +166,9 @@ const getVehicleDocumentByIdIR: any = {"usedParamSet":{"id":true},"params":[{"na
  *     status,
  *     rejection_reason,
  *     uploaded_at,
- *     reviewed_at
+ *     reviewed_at,
+ *     revision,
+ *     correction
  * FROM vehicle_documents
  * WHERE id = :id!::uuid
  * LIMIT 1
@@ -165,6 +179,7 @@ export const getVehicleDocumentById = new PreparedQuery<IGetVehicleDocumentByIdP
 
 /** 'UpdateVehicleDocumentReview' parameters type */
 export interface IUpdateVehicleDocumentReviewParams {
+  correction?: Json | null | void;
   id: string;
   rejectionReason?: string | null | void;
   status: review_status;
@@ -172,12 +187,14 @@ export interface IUpdateVehicleDocumentReviewParams {
 
 /** 'UpdateVehicleDocumentReview' return type */
 export interface IUpdateVehicleDocumentReviewResult {
+  correction: Json | null;
   document_number: string | null;
   document_type: vehicle_document_type;
   expiry_date: Date | null;
   id: string;
   rejection_reason: string | null;
   reviewed_at: Date | null;
+  revision: number;
   status: review_status;
   uploaded_at: Date;
   vehicle_id: string;
@@ -189,7 +206,7 @@ export interface IUpdateVehicleDocumentReviewQuery {
   result: IUpdateVehicleDocumentReviewResult;
 }
 
-const updateVehicleDocumentReviewIR: any = {"usedParamSet":{"status":true,"rejectionReason":true,"id":true},"params":[{"name":"status","required":true,"transform":{"type":"scalar"},"locs":[{"a":42,"b":49}]},{"name":"rejectionReason","required":false,"transform":{"type":"scalar"},"locs":[{"a":90,"b":105}]},{"name":"id","required":true,"transform":{"type":"scalar"},"locs":[{"a":143,"b":146}]}],"statement":"UPDATE vehicle_documents\nSET\n    status = :status!::review_status,\n    rejection_reason = :rejectionReason,\n    reviewed_at = NOW()\nWHERE id = :id!::uuid\nRETURNING\n    id,\n    vehicle_id,\n    document_type,\n    document_number,\n    expiry_date,\n    status,\n    rejection_reason,\n    uploaded_at,\n    reviewed_at"};
+const updateVehicleDocumentReviewIR: any = {"usedParamSet":{"status":true,"rejectionReason":true,"correction":true,"id":true},"params":[{"name":"status","required":true,"transform":{"type":"scalar"},"locs":[{"a":42,"b":49}]},{"name":"rejectionReason","required":false,"transform":{"type":"scalar"},"locs":[{"a":90,"b":105}]},{"name":"correction","required":false,"transform":{"type":"scalar"},"locs":[{"a":179,"b":189}]},{"name":"id","required":true,"transform":{"type":"scalar"},"locs":[{"a":209,"b":212}]}],"statement":"UPDATE vehicle_documents\nSET\n    status = :status!::review_status,\n    rejection_reason = :rejectionReason,\n    reviewed_at = NOW(),\n    revision = revision + 1,\n    correction = :correction::jsonb\nWHERE id = :id!::uuid\nRETURNING\n    id,\n    vehicle_id,\n    document_type,\n    document_number,\n    expiry_date,\n    status,\n    rejection_reason,\n    uploaded_at,\n    reviewed_at,\n    revision,\n    correction"};
 
 /**
  * Query generated from SQL:
@@ -198,7 +215,9 @@ const updateVehicleDocumentReviewIR: any = {"usedParamSet":{"status":true,"rejec
  * SET
  *     status = :status!::review_status,
  *     rejection_reason = :rejectionReason,
- *     reviewed_at = NOW()
+ *     reviewed_at = NOW(),
+ *     revision = revision + 1,
+ *     correction = :correction::jsonb
  * WHERE id = :id!::uuid
  * RETURNING
  *     id,
@@ -209,9 +228,63 @@ const updateVehicleDocumentReviewIR: any = {"usedParamSet":{"status":true,"rejec
  *     status,
  *     rejection_reason,
  *     uploaded_at,
- *     reviewed_at
+ *     reviewed_at,
+ *     revision,
+ *     correction
  * ```
  */
 export const updateVehicleDocumentReview = new PreparedQuery<IUpdateVehicleDocumentReviewParams,IUpdateVehicleDocumentReviewResult>(updateVehicleDocumentReviewIR);
+
+
+/** 'SaveVehicleDocumentState' parameters type */
+export interface ISaveVehicleDocumentStateParams {
+  correction?: Json | null | void;
+  documentNumber?: string | null | void;
+  expectedRevision: number;
+  expiryDate?: DateOrString | null | void;
+  id: string;
+  rejectionReason?: string | null | void;
+  status: review_status;
+}
+
+/** 'SaveVehicleDocumentState' return type */
+export interface ISaveVehicleDocumentStateResult {
+  correction: Json | null;
+  document_number: string | null;
+  document_type: vehicle_document_type;
+  expiry_date: Date | null;
+  id: string;
+  rejection_reason: string | null;
+  reviewed_at: Date | null;
+  revision: number;
+  status: review_status;
+  uploaded_at: Date;
+  vehicle_id: string;
+}
+
+/** 'SaveVehicleDocumentState' query type */
+export interface ISaveVehicleDocumentStateQuery {
+  params: ISaveVehicleDocumentStateParams;
+  result: ISaveVehicleDocumentStateResult;
+}
+
+const saveVehicleDocumentStateIR: any = {"usedParamSet":{"documentNumber":true,"expiryDate":true,"status":true,"rejectionReason":true,"correction":true,"id":true,"expectedRevision":true},"params":[{"name":"documentNumber","required":false,"transform":{"type":"scalar"},"locs":[{"a":46,"b":60}]},{"name":"expiryDate","required":false,"transform":{"type":"scalar"},"locs":[{"a":76,"b":86}]},{"name":"status","required":true,"transform":{"type":"scalar"},"locs":[{"a":103,"b":110},{"a":219,"b":226}]},{"name":"rejectionReason","required":false,"transform":{"type":"scalar"},"locs":[{"a":146,"b":161}]},{"name":"correction","required":false,"transform":{"type":"scalar"},"locs":[{"a":176,"b":186}]},{"name":"id","required":true,"transform":{"type":"scalar"},"locs":[{"a":316,"b":319}]},{"name":"expectedRevision","required":true,"transform":{"type":"scalar"},"locs":[{"a":340,"b":357}]}],"statement":"UPDATE vehicle_documents SET\n document_number=:documentNumber,\n expiry_date=:expiryDate::date,\n status=:status!::review_status,\n rejection_reason=:rejectionReason,\n correction=:correction::jsonb,\n reviewed_at=CASE WHEN :status!::review_status='REJECTED' THEN reviewed_at ELSE NULL END,\n revision=revision+1\nWHERE id=:id!::uuid AND revision=:expectedRevision!::integer\nRETURNING *"};
+
+/**
+ * Query generated from SQL:
+ * ```
+ * UPDATE vehicle_documents SET
+ *  document_number=:documentNumber,
+ *  expiry_date=:expiryDate::date,
+ *  status=:status!::review_status,
+ *  rejection_reason=:rejectionReason,
+ *  correction=:correction::jsonb,
+ *  reviewed_at=CASE WHEN :status!::review_status='REJECTED' THEN reviewed_at ELSE NULL END,
+ *  revision=revision+1
+ * WHERE id=:id!::uuid AND revision=:expectedRevision!::integer
+ * RETURNING *
+ * ```
+ */
+export const saveVehicleDocumentState = new PreparedQuery<ISaveVehicleDocumentStateParams,ISaveVehicleDocumentStateResult>(saveVehicleDocumentStateIR);
 
 

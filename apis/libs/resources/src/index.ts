@@ -30,3 +30,5 @@ export * from './rides/services/razorpay.service.js';
 export * from './common/base.service.js';
 
 export * from './maps/maps.service.js';
+
+export * from './rides/services/driver-ride.service.js';

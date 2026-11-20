@@ -1,9 +1,16 @@
-import { ApiEnvelope } from '../openapi/api-envelope.decorator.js';
+import { AdminReportingService } from '../../libs/resources/src/admin/admin-reporting.service.js';
+import { AdminRidesPageDto } from '../openapi/admin-response.dto.js';
+import { DriverRideService } from '@app/resources';
 import {
-  RidesDataDto,
-  RideDetailDto,
-  PaymentDataDto,
-} from '../openapi/response.dto.js';
+  CompleteDriverRideDto,
+  AdminOfferReasonDto,
+} from '@app/resources/rides/dto/driver-ride.dto.js';
+import {
+  DriverRideDetailDto,
+  EligibleDriversDto,
+} from '../openapi/driver-response.dto.js';
+import { ApiEnvelope } from '../openapi/api-envelope.decorator.js';
+import { RideDetailDto, PaymentDataDto } from '../openapi/response.dto.js';
 import {
   Body,
   Controller,
@@ -34,8 +41,6 @@ import {
   CancelRideDto,
   UpdateRideStatusDto,
 } from '@app/resources/rides/dto/ride.dto.js';
-import type { ride_status } from '@db/queries/rides/rides.queries.js';
-import type { vehicle_category } from '@db/queries/rides/vehicle_fare_rates.queries.js';
 
 @ApiTags('Admin Rides')
 @ApiCookieAuth('access_token')
@@ -44,25 +49,57 @@ import type { vehicle_category } from '@db/queries/rides/vehicle_fare_rates.quer
 @Roles('Admin')
 @Controller('admin/rides')
 export class AdminRidesController {
-  constructor(private readonly adminRideService: AdminRideService) {}
+  constructor(
+    private readonly adminRideService: AdminRideService,
+    private readonly reports: AdminReportingService,
+    private readonly driverRides: DriverRideService,
+  ) {}
+
+  @Get(':id/eligible-drivers')
+  @ApiEnvelope(EligibleDriversDto)
+  eligible(@Param('id') id: string) {
+    return this.driverRides.candidates(id);
+  }
+  @Post(':id/offers/:offerId/revoke')
+  @HttpCode(200)
+  @ApiEnvelope(DriverRideDetailDto)
+  revoke(
+    @CurrentUser() user: JwtClaims,
+    @Param('id') id: string,
+    @Param('offerId') offerId: string,
+    @Body() dto: AdminOfferReasonDto,
+  ) {
+    return this.driverRides.release(
+      id,
+      offerId,
+      user.user_id,
+      dto.reason,
+      dto.operation_id,
+    );
+  }
+  @Post(':id/complete')
+  @HttpCode(200)
+  @ApiEnvelope(DriverRideDetailDto)
+  complete(
+    @CurrentUser() user: JwtClaims,
+    @Param('id') id: string,
+    @Body() dto: CompleteDriverRideDto,
+  ) {
+    return this.driverRides.complete(id, user.user_id, dto, true);
+  }
 
   @Get()
   @ApiOperation({ summary: 'List rides with optional filters' })
-  @ApiEnvelope(RidesDataDto, 200)
+  @ApiEnvelope(AdminRidesPageDto, 200)
   list(@Query() query: AdminListRidesQueryDto) {
-    return this.adminRideService.listRides(
-      query.status as ride_status | undefined,
-      query.category as vehicle_category | undefined,
-      query.limit ?? 20,
-      query.offset ?? 0,
-    );
+    return this.reports.rides(query);
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Get full ride detail' })
-  @ApiEnvelope(RideDetailDto, 200)
-  getDetail(@Param('id') id: string) {
-    return this.adminRideService.getRideDetail(id);
+  @ApiEnvelope(DriverRideDetailDto, 200)
+  getDetail(@CurrentUser() user: JwtClaims, @Param('id') id: string) {
+    return this.driverRides.detail(id, user.user_id, true);
   }
 
   @Post(':id/assign')
@@ -105,7 +142,10 @@ export class AdminRidesController {
 
   @Post(':id/payments/:paymentId/mark-paid')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Mark offline payment as collected' })
+  @ApiOperation({
+    summary: 'Deprecated: use ride completion to declare cash collection',
+    deprecated: true,
+  })
   @ApiEnvelope(PaymentDataDto, 200)
   markOfflinePaid(
     @Param('id') id: string,

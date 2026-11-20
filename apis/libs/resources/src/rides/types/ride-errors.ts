@@ -5,12 +5,19 @@ export class RideError extends HttpException {
     message: string,
     status: HttpStatus,
     public readonly errorCode: string,
+    cause?: unknown,
   ) {
-    super({ message, errorCode }, status);
+    super({ message, errorCode }, status, { cause });
   }
 }
 
 export const RideErrors = {
+  fareChanged: () =>
+    new RideError(
+      'The fare has changed. Review the updated total before booking.',
+      HttpStatus.CONFLICT,
+      'FARE_CHANGED',
+    ),
   rideNotFound: () =>
     new RideError('Ride not found', HttpStatus.NOT_FOUND, 'RIDE_NOT_FOUND'),
   fareRateNotFound: () =>
@@ -28,12 +35,17 @@ export const RideErrors = {
       'PASSENGER_COUNT_EXCEEDS_CAPACITY',
     ),
   invalidTripDates: () =>
-    new RideError('Invalid trip dates', HttpStatus.BAD_REQUEST, 'INVALID_TRIP_DATES'),
-  mapsFailed: () =>
+    new RideError(
+      'Invalid trip dates',
+      HttpStatus.BAD_REQUEST,
+      'INVALID_TRIP_DATES',
+    ),
+  mapsFailed: (cause?: unknown) =>
     new RideError(
       'Failed to calculate route distance',
       HttpStatus.BAD_GATEWAY,
       'MAPS_FAILED',
+      cause,
     ),
   invalidStatusTransition: () =>
     new RideError(
@@ -66,7 +78,11 @@ export const RideErrors = {
       'VEHICLE_NOT_OWNED_BY_DRIVER',
     ),
   paymentNotFound: () =>
-    new RideError('Payment not found', HttpStatus.NOT_FOUND, 'PAYMENT_NOT_FOUND'),
+    new RideError(
+      'Payment not found',
+      HttpStatus.NOT_FOUND,
+      'PAYMENT_NOT_FOUND',
+    ),
   paymentNotPending: () =>
     new RideError(
       'No pending online payment for this ride',

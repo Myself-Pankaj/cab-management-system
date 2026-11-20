@@ -22,7 +22,9 @@ RETURNING
     status,
     rejection_reason,
     uploaded_at,
-    reviewed_at;
+    reviewed_at,
+    revision,
+    correction;
 
 /* @name ListVehicleDocumentsByVehicleId */
 SELECT
@@ -34,7 +36,9 @@ SELECT
     status,
     rejection_reason,
     uploaded_at,
-    reviewed_at
+    reviewed_at,
+    revision,
+    correction
 FROM vehicle_documents
 WHERE vehicle_id = :vehicleId!::uuid
 ORDER BY uploaded_at DESC;
@@ -49,7 +53,9 @@ SELECT
     status,
     rejection_reason,
     uploaded_at,
-    reviewed_at
+    reviewed_at,
+    revision,
+    correction
 FROM vehicle_documents
 WHERE id = :id!::uuid
 LIMIT 1;
@@ -59,7 +65,9 @@ UPDATE vehicle_documents
 SET
     status = :status!::review_status,
     rejection_reason = :rejectionReason,
-    reviewed_at = NOW()
+    reviewed_at = NOW(),
+    revision = revision + 1,
+    correction = :correction::jsonb
 WHERE id = :id!::uuid
 RETURNING
     id,
@@ -70,4 +78,18 @@ RETURNING
     status,
     rejection_reason,
     uploaded_at,
-    reviewed_at;
+    reviewed_at,
+    revision,
+    correction;
+
+/* @name SaveVehicleDocumentState */
+UPDATE vehicle_documents SET
+ document_number=:documentNumber,
+ expiry_date=:expiryDate::date,
+ status=:status!::review_status,
+ rejection_reason=:rejectionReason,
+ correction=:correction::jsonb,
+ reviewed_at=CASE WHEN :status!::review_status='REJECTED' THEN reviewed_at ELSE NULL END,
+ revision=revision+1
+WHERE id=:id!::uuid AND revision=:expectedRevision!::integer
+RETURNING *;

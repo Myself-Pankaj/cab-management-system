@@ -100,25 +100,29 @@ export const envSchema = z
     SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
     SMTP_USER: z.string().optional(),
     SMTP_PASSWORD: z.string().optional(),
-    SMTP_FROM: z
-      .string()
-      .default('noreply@cab-management.local'),
+    SMTP_FROM: z.string().default('noreply@cab-management.local'),
 
+    DRIVER_OFFER_EXPIRY_MINUTES: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(1440)
+      .default(30),
     DRIVER_VEHICLE_REQUIRED: z
       .enum(['true', 'false'])
       .default('false')
       .transform((v) => v === 'true'),
 
+    DOCUMENT_ENCRYPTION_KEY: z
+      .string()
+      .regex(/^[a-fA-F0-9]{64}$/)
+      .optional(),
     IMAGEKIT_PUBLIC_KEY: z.string().default(''),
     IMAGEKIT_PRIVATE_KEY: z.string().default(''),
-    IMAGEKIT_URL_ENDPOINT: z
-      .string()
-      .default('https://ik.imagekit.io/demo'),
+    IMAGEKIT_URL_ENDPOINT: z.string().default('https://ik.imagekit.io/demo'),
 
     ORS_API_KEY: z.string().default(''),
-    ORS_BASE_URL: z
-      .string()
-      .default('https://api.openrouteservice.org'),
+    ORS_BASE_URL: z.string().default('https://api.openrouteservice.org'),
     FARE_ROUND_TRIP_MULTIPLIER: z.coerce.number().min(1).default(2),
     PARTIAL_ADVANCE_PERCENT: z.coerce.number().int().min(1).max(99).default(30),
 

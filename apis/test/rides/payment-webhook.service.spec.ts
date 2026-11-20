@@ -5,7 +5,7 @@ import { PaymentWebhookService } from '../../libs/resources/src/rides/services/p
 describe('PaymentWebhookService', () => {
   const databaseService = {
     withTransaction: vi.fn(async (work: (client: unknown) => Promise<unknown>) =>
-      work({}),
+      work({ query: vi.fn().mockResolvedValue({ rows: [] }) }),
     ),
   };
   const paymentRepository = {
@@ -52,6 +52,8 @@ describe('PaymentWebhookService', () => {
       id: 'pay-1',
       ride_id: 'ride-1',
       status: 'PENDING',
+      amount: '100',
+      currency: 'INR',
     });
     rideRepository.findById.mockResolvedValue({
       id: 'ride-1',
@@ -67,6 +69,8 @@ describe('PaymentWebhookService', () => {
             id: 'rzp_pay_1',
             order_id: 'order_1',
             method: 'upi',
+            amount: 10000,
+            currency: 'INR',
           },
         },
       },

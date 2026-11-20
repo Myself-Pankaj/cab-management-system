@@ -44,6 +44,7 @@ SELECT
 FROM images
 WHERE owner_type = :ownerType!::image_owner_type
   AND owner_id = :ownerId!::uuid
+  AND (owner_type NOT IN ('DRIVER_DOCUMENT','VEHICLE_DOCUMENT') OR document_private)
 ORDER BY created_at DESC;
 
 /* @name GetImageById */
@@ -81,11 +82,13 @@ RETURNING
 SELECT COUNT(*)::int AS "count!"
 FROM images
 WHERE owner_type = :ownerType!::image_owner_type
-  AND owner_id = :ownerId!::uuid;
+  AND owner_id = :ownerId!::uuid
+  AND (owner_type NOT IN ('DRIVER_DOCUMENT','VEHICLE_DOCUMENT') OR document_private);
 
 /* @name CountImagesByOwnerAndType */
 SELECT COUNT(*)::int AS "count!"
 FROM images
 WHERE owner_type = :ownerType!::image_owner_type
   AND owner_id = :ownerId!::uuid
+  AND (owner_type NOT IN ('DRIVER_DOCUMENT','VEHICLE_DOCUMENT') OR document_private)
   AND image_type = :imageType!;

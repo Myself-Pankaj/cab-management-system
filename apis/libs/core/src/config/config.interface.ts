@@ -25,11 +25,13 @@ export interface AuthConfig {
 }
 
 export interface DriverConfig {
+  offerExpiryMinutes: number;
   vehicleRequired: boolean;
   requiredDocumentTypes: string[];
 }
 
 export interface MediaConfig {
+  documentEncryptionKey: string;
   imagekitPublicKey: string;
   imagekitPrivateKey: string;
   imagekitUrlEndpoint: string;

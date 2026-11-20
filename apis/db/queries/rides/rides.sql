@@ -3,6 +3,10 @@ INSERT INTO rides (
     booked_by_user_id,
     requested_vehicle_category,
     passenger_count,
+    bag_count,
+    special_requests,
+    booking_key,
+    booking_payload_hash,
     trip_type,
     pickup_address,
     pickup_exact_location,
@@ -24,6 +28,10 @@ VALUES (
     :bookedByUserId!::uuid,
     :requestedVehicleCategory!::vehicle_category,
     :passengerCount!,
+    :bagCount!,
+    :specialRequests,
+    :bookingKey,
+    :bookingPayloadHash,
     :tripType!::trip_type,
     :pickupAddress!,
     :pickupExactLocation,
@@ -48,6 +56,10 @@ RETURNING
     vehicle_id,
     requested_vehicle_category,
     passenger_count,
+    bag_count,
+    special_requests,
+    booking_key,
+    booking_payload_hash,
     trip_type,
     pickup_address,
     pickup_exact_location,
@@ -81,6 +93,10 @@ SELECT
     vehicle_id,
     requested_vehicle_category,
     passenger_count,
+    bag_count,
+    special_requests,
+    booking_key,
+    booking_payload_hash,
     trip_type,
     pickup_address,
     pickup_exact_location,
@@ -117,6 +133,10 @@ SELECT
     vehicle_id,
     requested_vehicle_category,
     passenger_count,
+    bag_count,
+    special_requests,
+    booking_key,
+    booking_payload_hash,
     trip_type,
     pickup_address,
     pickup_exact_location,
@@ -154,6 +174,10 @@ SELECT
     vehicle_id,
     requested_vehicle_category,
     passenger_count,
+    bag_count,
+    special_requests,
+    booking_key,
+    booking_payload_hash,
     trip_type,
     pickup_address,
     pickup_exact_location,
@@ -181,7 +205,13 @@ SELECT
 FROM rides
 WHERE booked_by_user_id = :bookedByUserId!::uuid
   AND (:status::ride_status IS NULL OR status = :status::ride_status)
-ORDER BY created_at DESC
+  AND (:view::text IS NULL
+    OR (:view::text = 'upcoming' AND status NOT IN ('COMPLETED', 'CANCELLED'))
+    OR (:view::text = 'completed' AND status IN ('COMPLETED', 'CANCELLED')))
+ORDER BY
+  CASE WHEN :view::text = 'upcoming' THEN pickup_at END ASC NULLS LAST,
+  CASE WHEN :view::text = 'completed' THEN updated_at END DESC NULLS LAST,
+  created_at DESC, id DESC
 LIMIT :limit!
 OFFSET :offset!;
 
@@ -193,6 +223,10 @@ SELECT
     vehicle_id,
     requested_vehicle_category,
     passenger_count,
+    bag_count,
+    special_requests,
+    booking_key,
+    booking_payload_hash,
     trip_type,
     pickup_address,
     pickup_exact_location,
@@ -235,6 +269,10 @@ RETURNING
     vehicle_id,
     requested_vehicle_category,
     passenger_count,
+    bag_count,
+    special_requests,
+    booking_key,
+    booking_payload_hash,
     trip_type,
     pickup_address,
     pickup_exact_location,
@@ -276,6 +314,10 @@ RETURNING
     vehicle_id,
     requested_vehicle_category,
     passenger_count,
+    bag_count,
+    special_requests,
+    booking_key,
+    booking_payload_hash,
     trip_type,
     pickup_address,
     pickup_exact_location,
@@ -316,6 +358,10 @@ RETURNING
     vehicle_id,
     requested_vehicle_category,
     passenger_count,
+    bag_count,
+    special_requests,
+    booking_key,
+    booking_payload_hash,
     trip_type,
     pickup_address,
     pickup_exact_location,
@@ -340,3 +386,16 @@ RETURNING
     cancelled_at,
     created_at,
     updated_at;
+
+/* @name GetRideByBookingKey */
+SELECT * FROM rides WHERE booked_by_user_id=:bookedByUserId!::uuid AND booking_key=:bookingKey!::uuid LIMIT 1;
+
+/* @name CountPassengerRides */
+SELECT
+ COUNT(*) FILTER (WHERE status NOT IN ('COMPLETED', 'CANCELLED'))::int AS upcoming,
+ COUNT(*) FILTER (WHERE status IN ('COMPLETED', 'CANCELLED'))::int AS completed,
+ COUNT(*) FILTER (WHERE (:status::ride_status IS NULL OR status = :status::ride_status)
+   AND (:view::text IS NULL
+     OR (:view::text = 'upcoming' AND status NOT IN ('COMPLETED', 'CANCELLED'))
+     OR (:view::text = 'completed' AND status IN ('COMPLETED', 'CANCELLED'))))::int AS total
+FROM rides WHERE booked_by_user_id = :bookedByUserId!::uuid;

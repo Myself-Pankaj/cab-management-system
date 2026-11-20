@@ -15,6 +15,7 @@ RETURNING
     status,
     reviewed_by,
     rejection_reason,
+    correction_document_ids,
     submitted_at,
     reviewed_at;
 
@@ -25,6 +26,7 @@ SELECT
     status,
     reviewed_by,
     rejection_reason,
+    correction_document_ids,
     submitted_at,
     reviewed_at
 FROM driver_verifications
@@ -38,7 +40,8 @@ SET
     status = :status!::review_status,
     reviewed_by = :reviewedBy::uuid,
     rejection_reason = :rejectionReason,
-    reviewed_at = NOW()
+    reviewed_at = NOW(),
+    correction_document_ids = COALESCE(:correctionDocumentIds::uuid[], correction_document_ids)
 WHERE id = :id!::uuid
 RETURNING
     id,
@@ -46,5 +49,6 @@ RETURNING
     status,
     reviewed_by,
     rejection_reason,
+    correction_document_ids,
     submitted_at,
     reviewed_at;

@@ -27,23 +27,6 @@ export class ResponseInterceptor<T> implements NestInterceptor<
   ): Observable<SuccessResponse<T>> {
     const request = context.switchToHttp().getRequest<Request>();
 
-    // Log request details only in development environment
-    if (this.configService.isDevelopment) {
-      this.logger.logWithMetadata(
-        `Incoming Request: ${request.method} ${request.url}`,
-        {
-          method: request.method,
-          url: request.url,
-          headers: request.headers,
-          query: request.query,
-          body: request.body,
-          userAgent: request.get('user-agent'),
-          ip: request.ip,
-        },
-        'ResponseInterceptor',
-      );
-    }
-
     return next.handle().pipe(
       map((data) => {
         // If already wrapped, pass through
@@ -57,21 +40,7 @@ export class ResponseInterceptor<T> implements NestInterceptor<
         }
 
         // Wrap response in standard format using ResponseBuilder
-        const response = ResponseBuilder.success(data, request.url);
-
-        // Log response details only in development environment
-        if (this.configService.isDevelopment) {
-          this.logger.logWithMetadata(
-            `Outgoing Response: ${request.method} ${request.url}`,
-            {
-              method: request.method,
-              url: request.url,
-              responseData: data,
-              success: true,
-            },
-            'ResponseInterceptor',
-          );
-        }
+        const response = ResponseBuilder.success(data, request.path);
 
         return response;
       }),

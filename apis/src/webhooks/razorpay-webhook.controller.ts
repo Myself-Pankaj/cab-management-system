@@ -23,11 +23,16 @@ export class RazorpayWebhookController {
   handle(
     @Req() req: RawBodyRequest<Request>,
     @Headers('x-razorpay-signature') signature: string,
+    @Headers('x-razorpay-event-id') eventId?: string,
   ) {
     const rawBody =
       req.rawBody?.toString('utf8') ??
       (typeof req.body === 'string' ? req.body : JSON.stringify(req.body));
 
-    return this.paymentWebhookService.handleWebhook(rawBody, signature ?? '');
+    return this.paymentWebhookService.handleWebhook(
+      rawBody,
+      signature ?? '',
+      eventId,
+    );
   }
 }

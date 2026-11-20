@@ -15,13 +15,16 @@ export function onboardingFixture() {
     id: type,
     driver_profile_id: profile.id,
     document_type: type,
-    document_number: null,
+    document_number: null as string | null,
+    expiry_date: null as Date | null,
+    revision: 0,
+    correction: null as unknown,
     status: 'PENDING',
-    rejection_reason: null,
+    rejection_reason: null as string | null,
     uploaded_at: date,
-    reviewed_at: null,
+    reviewed_at: null as Date | null,
   }));
-  const vehicleDocuments = ['RC', 'PUC'].map((type) => ({
+  const vehicleDocuments = ['RC', 'PUC', 'INSURANCE'].map((type) => ({
     ...driverDocuments[0],
     id: type,
     vehicle_id: 'vehicle-1',
@@ -32,6 +35,13 @@ export function onboardingFixture() {
     id: 'vehicle-1',
     driver_profile_id: profile.id,
     vehicle_number: 'KA01AB1234',
+    details_review_status: 'PENDING',
+    photos_review_status: 'PENDING',
+    details_rejection_reason: null as string | null,
+    photos_rejection_reason: null as string | null,
+    photos_correction_completed: false,
+    photos_correction_baseline: [] as string[],
+    review_revision: 0,
     vehicle_type: 'SEATER_4',
     make: null,
     model: null,
@@ -57,9 +67,10 @@ export function onboardingFixture() {
     id: 'verification-1',
     driver_profile_id: profile.id,
     status: 'PENDING',
+    correction_document_ids: [] as string[],
     submitted_at: date,
-    reviewed_at: null,
-    rejection_reason: null,
+    reviewed_at: null as Date | null,
+    rejection_reason: null as string | null,
   };
   const user = {
     findById: vi
@@ -67,6 +78,8 @@ export function onboardingFixture() {
       .mockResolvedValue({ id: 'user-1', global_role: 'Driver' }),
   };
   const profiles = {
+    audit: vi.fn(),
+    auditHistory: vi.fn().mockResolvedValue([]),
     findByUserId: vi.fn().mockResolvedValue(profile),
     lockById: vi.fn().mockResolvedValue(profile),
     updateStatus: vi.fn(async (_id, status) => ({ ...profile, status })),
@@ -74,7 +87,21 @@ export function onboardingFixture() {
   const documents = {
     listByProfileId: vi.fn().mockResolvedValue(driverDocuments),
     create: vi.fn(),
-    updateDetails: vi.fn().mockResolvedValue(driverDocuments[0]),
+    findById: vi.fn(
+      async (id) => driverDocuments.find((doc) => doc.id === id) ?? null,
+    ),
+    saveState: vi.fn(async (params) => {
+      const doc = driverDocuments.find((d) => d.id === params.id)!;
+      Object.assign(doc, {
+        document_number: params.documentNumber,
+        expiry_date: params.expiryDate,
+        status: params.status,
+        rejection_reason: params.rejectionReason,
+        correction: params.correction ? JSON.parse(params.correction) : null,
+        revision: doc.revision + 1,
+      });
+      return doc;
+    }),
   };
   const banks = {
     findByProfileId: vi.fn().mockResolvedValue(bank),
@@ -89,11 +116,27 @@ export function onboardingFixture() {
   const vehicleDocs = {
     listByVehicleId: vi.fn().mockResolvedValue(vehicleDocuments),
     create: vi.fn(),
-    updateDetails: vi.fn().mockResolvedValue(vehicleDocuments[0]),
+    findById: vi.fn(
+      async (id) => vehicleDocuments.find((doc) => doc.id === id) ?? null,
+    ),
+    saveState: vi.fn(async (params) => {
+      const doc = vehicleDocuments.find((d) => d.id === params.id)!;
+      Object.assign(doc, {
+        document_number: params.documentNumber,
+        expiry_date: params.expiryDate,
+        status: params.status,
+        rejection_reason: params.rejectionReason,
+        correction: params.correction ? JSON.parse(params.correction) : null,
+        revision: doc.revision + 1,
+      });
+      return doc;
+    }),
   };
   const verifications = {
     create: vi.fn().mockResolvedValue(verification),
-    findLatestByProfileId: vi.fn().mockResolvedValue(verification),
+    findLatestByProfileId: vi.fn(async () =>
+      profile.status === 'DRAFT' ? null : verification,
+    ),
   };
   const images = {
     listByOwner: vi.fn(async (_type, id) => [
@@ -111,7 +154,9 @@ export function onboardingFixture() {
       },
     ]),
   };
-  const client = {} as PoolClient;
+  const client = {
+    query: vi.fn().mockResolvedValue({ rows: [] }),
+  } as unknown as PoolClient;
   const db = {
     withTransaction: vi.fn(
       async <T>(work: (client: PoolClient) => Promise<T>) => work(client),

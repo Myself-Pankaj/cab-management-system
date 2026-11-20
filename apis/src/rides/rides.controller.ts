@@ -4,8 +4,9 @@ import {
   LocationSuggestionDto,
   VehicleCategoryResponseDto,
   RideQuoteResponseDto,
+  RideEstimatesResponseDto,
   RideDetailDto,
-  RidesDataDto,
+  PassengerRidesDataDto,
   OnlinePaymentDto,
 } from '../openapi/response.dto.js';
 import {
@@ -37,8 +38,10 @@ import {
 import type { JwtClaims } from '@app/resources/auth/types/auth.types.js';
 import {
   CreateRideDto,
-  ListRidesQueryDto,
+  ListPassengerRidesQueryDto,
   RideQuoteDto,
+  RideEstimateDto,
+  VerifyRidePaymentDto,
 } from '@app/resources/rides/dto/ride.dto.js';
 import type { ride_status } from '@db/queries/rides/rides.queries.js';
 
@@ -70,6 +73,26 @@ export class RidesController {
     return this.vehicleCategoryService.listCategories();
   }
 
+  @Post('estimates')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Estimate journey and all active cab fares' })
+  @ApiEnvelope(RideEstimatesResponseDto, 200)
+  estimates(@Body() dto: RideEstimateDto) {
+    return this.rideQuoteService.estimates(dto);
+  }
+
+  @Post(':id/verify-payment')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Verify Razorpay checkout payment for a booking' })
+  @ApiEnvelope(RideDetailDto, 200)
+  verifyPayment(
+    @CurrentUser() user: JwtClaims,
+    @Param('id') id: string,
+    @Body() dto: VerifyRidePaymentDto,
+  ) {
+    return this.rideBookingService.verifyPayment(user.user_id, id, dto);
+  }
+
   @Post('quote')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Get fare quote for a ride' })
@@ -88,13 +111,17 @@ export class RidesController {
 
   @Get('me')
   @ApiOperation({ summary: 'List rides booked by current user' })
-  @ApiEnvelope(RidesDataDto, 200)
-  listMine(@CurrentUser() user: JwtClaims, @Query() query: ListRidesQueryDto) {
+  @ApiEnvelope(PassengerRidesDataDto, 200)
+  listMine(
+    @CurrentUser() user: JwtClaims,
+    @Query() query: ListPassengerRidesQueryDto,
+  ) {
     return this.rideBookingService.listMyRides(
       user.user_id,
       query.status as ride_status | undefined,
       query.limit ?? 20,
       query.offset ?? 0,
+      query.view,
     );
   }
 

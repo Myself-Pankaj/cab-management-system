@@ -1,4 +1,18 @@
-import { Injectable } from '@nestjs/common';
+import {
+  applicationStatus,
+  assertVehicleCorrection,
+  assertSelectedForCorrection,
+  assertDocumentEditable,
+  assertMetadataFields,
+  correctedState,
+  dateOnly,
+  parseCorrection,
+} from '../types/onboarding-policy.js';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+} from '@nestjs/common';
 import type { PoolClient } from 'pg';
 import { DatabaseService } from '@app/core';
 import { UserRepository } from '../../auth/repositories/user.repository.js';
@@ -13,7 +27,6 @@ import { VehicleDocumentRepository } from '../repositories/vehicle-document.repo
 import { DriverVerificationRepository } from '../repositories/driver-verification.repository.js';
 import { DriverErrors } from '../types/driver-errors.js';
 import {
-  EDITABLE_DRIVER_PROFILE_STATUSES,
   toDriverProfileResponse,
   type DriverProfileRow,
 } from '../types/driver.types.js';
@@ -48,13 +61,54 @@ export class DriverOnboardingService {
       this.getApplication(profile.id),
       this.verificationRepository.findLatestByProfileId(profile.id),
     ]);
+    const status = applicationStatus(profile, verification, application);
     return {
       profile: toDriverProfileResponse(profile),
+      application_status: status,
+      can_edit_vehicle:
+        profile.status !== 'SUSPENDED' &&
+        (status === 'DRAFT' ||
+          (status === 'REJECTED' &&
+            application.vehicles.some(
+              (v) => v.details_review_status === 'REJECTED',
+            ))) &&
+        application.vehicles.length <= 1,
+      can_edit_vehicle_photos:
+        profile.status !== 'SUSPENDED' &&
+        application.vehicles.length <= 1 &&
+        (status === 'DRAFT' ||
+          (status === 'REJECTED' &&
+            application.vehicles.some(
+              (v) => v.photos_review_status === 'REJECTED',
+            ))),
+      can_submit:
+        profile.status !== 'SUSPENDED' &&
+        ['DRAFT', 'REJECTED'].includes(status) &&
+        (status !== 'REJECTED' ||
+          !!verification?.correction_document_ids.length ||
+          application.vehicles.some(
+            (v) => !!v.details_rejection_reason || !!v.photos_rejection_reason,
+          )) &&
+        application.complete &&
+        application.vehicles.length === 1,
+      ride_eligible:
+        profile.status === 'APPROVED' &&
+        application.compliance_approved &&
+        status === 'APPROVED',
+      ride_eligibility_reason:
+        profile.status !== 'APPROVED'
+          ? 'ACCOUNT_NOT_APPROVED'
+          : !application.compliance_approved
+            ? 'VERIFICATION_REQUIREMENTS_NOT_APPROVED'
+            : status !== 'APPROVED'
+              ? 'APPLICATION_REVIEW_REQUIRED'
+              : null,
       ...application,
       verification: verification
         ? {
             id: verification.id,
             status: verification.status,
+            correction_document_ids: verification.correction_document_ids,
             rejection_reason: verification.rejection_reason,
             submitted_at: verification.submitted_at.toISOString(),
             reviewed_at: verification.reviewed_at?.toISOString() ?? null,
@@ -118,16 +172,10 @@ export class DriverOnboardingService {
           doc.images.length > 0,
       );
     const checklist = {
-      aadhaar: hasDocument(documentsWithImages, 'AADHAAR'),
+      vehicle_photo:
+        activeVehicles.length > 0 &&
+        activeVehicles.every((v) => v.images.length > 0),
       driving_licence: hasDocument(documentsWithImages, 'DRIVING_LICENCE'),
-      bank_details:
-        !!bank &&
-        [
-          bank.account_holder_name,
-          bank.account_number,
-          bank.ifsc,
-          bank.bank_name,
-        ].every((v) => !!v?.trim()),
       vehicle:
         activeVehicles.length > 0 &&
         activeVehicles.every(
@@ -136,6 +184,9 @@ export class DriverOnboardingService {
       rc:
         activeVehicles.length > 0 &&
         activeVehicles.every((v) => hasDocument(v.documents, 'RC')),
+      insurance:
+        activeVehicles.length > 0 &&
+        activeVehicles.every((v) => hasDocument(v.documents, 'INSURANCE')),
       puc:
         activeVehicles.length > 0 &&
         activeVehicles.every((v) => hasDocument(v.documents, 'PUC')),
@@ -145,15 +196,52 @@ export class DriverOnboardingService {
       bank_account: bank ? this.toBankAccountResponse(bank) : null,
       vehicles: vehiclesWithDocuments,
       checklist,
-      complete: Object.values(checklist).every(Boolean),
+      compliance_approved:
+        [...documentsWithImages, ...activeVehicles.flatMap((v) => v.documents)]
+          .filter((d) => d.images.length > 0 || d.status === 'REJECTED')
+          .every((d) => d.status === 'APPROVED') &&
+        activeVehicles.every(
+          (v) =>
+            v.details_review_status === 'APPROVED' &&
+            v.photos_review_status === 'APPROVED',
+        ) &&
+        documentsWithImages.some(
+          (d) =>
+            d.document_type === 'DRIVING_LICENCE' &&
+            d.status === 'APPROVED' &&
+            d.images.length > 0,
+        ) &&
+        activeVehicles.length > 0 &&
+        activeVehicles.every((v) =>
+          ['RC', 'PUC', 'INSURANCE'].every((type) =>
+            v.documents.some(
+              (d) =>
+                d.document_type === type &&
+                d.status === 'APPROVED' &&
+                d.images.length > 0,
+            ),
+          ),
+        ),
+      complete:
+        Object.values(checklist).every(Boolean) &&
+        activeVehicles.every(
+          (v) =>
+            v.details_review_status !== 'REJECTED' &&
+            (v.photos_review_status !== 'REJECTED' ||
+              v.photos_correction_completed),
+        ) &&
+        !documentsWithImages.some((d) => d.status === 'REJECTED') &&
+        !activeVehicles.some((v) =>
+          v.documents.some((d) => d.status === 'REJECTED'),
+        ),
     };
   }
 
   async assertComplete(profileId: string, client: PoolClient) {
     const application = await this.getApplication(profileId, client);
-    if (!application.checklist.bank_details)
-      throw DriverErrors.bankDetailsMissing();
     if (!application.checklist.vehicle) throw DriverErrors.vehicleRequired();
+    if (!application.checklist.vehicle_photo)
+      throw DriverErrors.vehiclePhotoRequired();
     if (!application.complete) throw DriverErrors.documentsIncomplete();
   }
 
@@ -162,53 +250,91 @@ export class DriverOnboardingService {
     dto: CreateDriverDocumentDto,
     documentId?: string,
   ) {
-    return this.withEditable(userId, async (profile, client) => {
-      const documents = await this.documentRepository.listByProfileId(
-        profile.id,
-        client,
+    if (
+      dto.document_type === 'AADHAAR' &&
+      dto.document_number &&
+      !/^\d{4}$/.test(dto.document_number)
+    ) {
+      throw new BadRequestException(
+        'Supply only the last four Aadhaar digits and upload a masked copy',
       );
-      const existing = documentId
-        ? documents.find((d) => d.id === documentId)
-        : (documents.find(
-            (d) =>
-              d.document_type === dto.document_type && d.status !== 'REJECTED',
-          ) ?? documents.find((d) => d.document_type === dto.document_type));
-      if (
-        documentId &&
-        (!existing || existing.document_type !== dto.document_type)
-      )
-        throw DriverErrors.documentNotFound();
-      if (
-        existing?.status === 'REJECTED' &&
-        documents.some(
-          (d) =>
-            d.id !== existing.id &&
-            d.document_type === dto.document_type &&
-            d.status !== 'REJECTED',
+    }
+    return this.withEditable(
+      userId,
+      async (profile, client) => {
+        const documents = await this.documentRepository.listByProfileId(
+          profile.id,
+          client,
+        );
+        const existing = documentId
+          ? documents.find((d) => d.id === documentId)
+          : (documents.find(
+              (d) =>
+                d.document_type === dto.document_type &&
+                d.status !== 'REJECTED',
+            ) ?? documents.find((d) => d.document_type === dto.document_type));
+        if (
+          documentId &&
+          (!existing || existing.document_type !== dto.document_type)
         )
-      ) {
-        throw DriverErrors.invalidStatusTransition();
-      }
-      const document = existing
-        ? await this.documentRepository.updateDetails(
-            existing.id,
-            dto.document_number ?? existing.document_number,
-            client,
-          )
-        : await this.documentRepository.create(
-            {
-              driverProfileId: profile.id,
-              documentType: dto.document_type,
-              documentNumber: dto.document_number ?? null,
-              status: 'PENDING',
-            },
+          throw DriverErrors.documentNotFound();
+        const verification =
+          await this.verificationRepository.findLatestByProfileId(
+            profile.id,
             client,
           );
-      return {
-        document: this.toDocumentResponse(document),
-        message: 'Document saved. Attach its image using /media.',
-      };
-    });
+        const status = applicationStatus(profile, verification);
+        assertSelectedForCorrection(status, existing?.id, verification);
+        assertDocumentEditable(status, existing, dto.expected_revision);
+        if (dto.expiry_date && dto.document_type !== 'DRIVING_LICENCE')
+          throw new BadRequestException(
+            'Only driving licences support expiry dates',
+          );
+        const number = dto.document_number ?? existing?.document_number ?? null;
+        const expiry = dto.expiry_date
+          ? new Date(`${dto.expiry_date}T00:00:00`)
+          : (existing?.expiry_date ?? null);
+        if (existing) assertMetadataFields(existing, number, expiry);
+        const state = existing
+          ? correctedState(existing, number, expiry)
+          : {
+              status: 'PENDING' as const,
+              rejectionReason: null,
+              correction: null,
+            };
+        const document = existing
+          ? await this.documentRepository.saveState(
+              {
+                id: existing.id,
+                expectedRevision: existing.revision,
+                documentNumber: number,
+                expiryDate: expiry,
+                status: state.status,
+                rejectionReason: state.rejectionReason,
+                correction: state.correction
+                  ? JSON.stringify(state.correction)
+                  : null,
+              },
+              client,
+            )
+          : await this.documentRepository.create(
+              {
+                driverProfileId: profile.id,
+                documentType: dto.document_type,
+                documentNumber: number,
+                expiryDate: expiry,
+                status: 'PENDING',
+              },
+              client,
+            );
+        return {
+          document: this.toDocumentResponse(document),
+          message:
+            'Document saved. Upload its private image using /media/documents/upload.',
+        };
+      },
+      true,
+    );
   }
 
   async listDocuments(userId: string) {
@@ -244,32 +370,94 @@ export class DriverOnboardingService {
     dto: CreateDriverVehicleDto,
     vehicleId?: string,
   ) {
-    return this.withEditable(userId, async (profile, client) => {
-      const params = {
-        driverProfileId: profile.id,
-        vehicleNumber: dto.vehicle_number.trim().toUpperCase(),
-        vehicleType: dto.vehicle_type,
-        make: dto.make ?? null,
-        model: dto.model ?? null,
-        color: dto.color ?? null,
-        manufacturingYear: dto.manufacturing_year ?? null,
-      };
-      const existing = vehicleId
-        ? await this.vehicleRepository.findById(vehicleId, client)
-        : (
-            await this.vehicleRepository.listByProfileId(profile.id, client)
-          ).find((v) => v.vehicle_number === params.vehicleNumber);
-      if (vehicleId && (!existing || existing.driver_profile_id !== profile.id))
-        throw DriverErrors.vehicleNotFound();
-      const vehicle = existing
-        ? await this.vehicleRepository.updateDetails(
-            existing.id,
-            params,
+    return this.withEditable(
+      userId,
+      async (profile, client) => {
+        const params = {
+          driverProfileId: profile.id,
+          vehicleNumber: dto.vehicle_number.trim().toUpperCase(),
+          vehicleType: dto.vehicle_type,
+          make: dto.make ?? null,
+          model: dto.model ?? null,
+          color: dto.color ?? null,
+          manufacturingYear: dto.manufacturing_year ?? null,
+        };
+        const vehicles = await this.vehicleRepository.listByProfileId(
+          profile.id,
+          client,
+        );
+        if (vehicles.length > 1)
+          throw new ConflictException(
+            'Multiple legacy vehicles require admin resolution',
+          );
+        const existing = vehicleId
+          ? await this.vehicleRepository.findById(vehicleId, client)
+          : vehicles[0];
+        if (
+          !vehicleId &&
+          existing &&
+          existing.vehicle_number !== params.vehicleNumber
+        )
+          throw new ConflictException(
+            'A vehicle is already registered. Edit the saved vehicle instead.',
+          );
+        if (
+          vehicleId &&
+          (!existing || existing.driver_profile_id !== profile.id)
+        )
+          throw DriverErrors.vehicleNotFound();
+        const verification =
+          await this.verificationRepository.findLatestByProfileId(
+            profile.id,
             client,
+          );
+        const status = applicationStatus(profile, verification);
+        if (status !== 'DRAFT') {
+          if (!existing || !vehicleId) throw DriverErrors.vehicleNotFound();
+          assertVehicleCorrection(
+            status,
+            existing,
+            'DETAILS',
+            dto.expected_revision,
+          );
+          const unchanged =
+            existing.vehicle_number === params.vehicleNumber &&
+            existing.vehicle_type === params.vehicleType &&
+            existing.make === params.make &&
+            existing.model === params.model &&
+            existing.color === params.color &&
+            existing.manufacturing_year === params.manufacturingYear;
+          if (
+            (await this.vehicleRepository.blockers(existing.id, client)).length
           )
-        : await this.vehicleRepository.create(params, client);
-      return { vehicle: this.toVehicleResponse(vehicle) };
-    });
+            throw new ConflictException(
+              'Finish or resolve assigned rides before correcting vehicle details',
+            );
+          if (unchanged)
+            throw new BadRequestException(
+              'Change the vehicle details requested by admin before saving',
+            );
+        }
+        const vehicle = existing
+          ? await this.vehicleRepository.updateDetails(
+              existing.id,
+              params,
+              client,
+            )
+          : await this.vehicleRepository.create(params, client);
+        if (status !== 'DRAFT')
+          await this.vehicleRepository.reviewGroup(
+            vehicle.id,
+            'DETAILS',
+            'PENDING',
+            existing?.details_rejection_reason ?? null,
+            client,
+          );
+        const saved = await this.vehicleRepository.findById(vehicle.id, client);
+        return { vehicle: this.toVehicleResponse(saved ?? vehicle) };
+      },
+      true,
+    );
   }
 
   async listVehicles(userId: string) {
@@ -283,57 +471,151 @@ export class DriverOnboardingService {
     dto: CreateVehicleDocumentDto,
     documentId?: string,
   ) {
-    return this.withEditable(userId, async (profile, client) => {
-      const vehicle = await this.vehicleRepository.findById(vehicleId, client);
-      if (!vehicle || vehicle.driver_profile_id !== profile.id)
-        throw DriverErrors.vehicleNotFound();
-      const documents = await this.vehicleDocumentRepository.listByVehicleId(
-        vehicleId,
-        client,
-      );
-      const existing = documentId
-        ? documents.find((d) => d.id === documentId)
-        : (documents.find(
-            (d) =>
-              d.document_type === dto.document_type && d.status !== 'REJECTED',
-          ) ?? documents.find((d) => d.document_type === dto.document_type));
-      if (
-        documentId &&
-        (!existing || existing.document_type !== dto.document_type)
-      )
-        throw DriverErrors.documentNotFound();
-      const document = existing
-        ? await this.vehicleDocumentRepository.updateDetails(
-            existing.id,
-            dto.document_number ?? existing.document_number,
-            dto.expiry_date ? new Date(dto.expiry_date) : existing.expiry_date,
-            client,
-          )
-        : await this.vehicleDocumentRepository.create(
-            {
-              vehicleId,
-              documentType: dto.document_type,
-              documentNumber: dto.document_number ?? null,
-              expiryDate: dto.expiry_date ? new Date(dto.expiry_date) : null,
-              status: 'PENDING',
-            },
+    return this.withEditable(
+      userId,
+      async (profile, client) => {
+        const vehicle = await this.vehicleRepository.findById(
+          vehicleId,
+          client,
+        );
+        if (!vehicle || vehicle.driver_profile_id !== profile.id)
+          throw DriverErrors.vehicleNotFound();
+        const documents = await this.vehicleDocumentRepository.listByVehicleId(
+          vehicleId,
+          client,
+        );
+        const existing = documentId
+          ? documents.find((d) => d.id === documentId)
+          : (documents.find(
+              (d) =>
+                d.document_type === dto.document_type &&
+                d.status !== 'REJECTED',
+            ) ?? documents.find((d) => d.document_type === dto.document_type));
+        if (
+          documentId &&
+          (!existing || existing.document_type !== dto.document_type)
+        )
+          throw DriverErrors.documentNotFound();
+        const verification =
+          await this.verificationRepository.findLatestByProfileId(
+            profile.id,
             client,
           );
-      return {
-        document: this.toVehicleDocumentResponse(document),
-        message: 'Document saved. Attach its image using /media.',
-      };
-    });
+        const status = applicationStatus(profile, verification);
+        assertSelectedForCorrection(status, existing?.id, verification);
+        assertDocumentEditable(status, existing, dto.expected_revision);
+        const number = dto.document_number ?? existing?.document_number ?? null;
+        const expiry = dto.expiry_date
+          ? new Date(`${dto.expiry_date}T00:00:00`)
+          : (existing?.expiry_date ?? null);
+        if (existing) assertMetadataFields(existing, number, expiry);
+        const state = existing
+          ? correctedState(existing, number, expiry)
+          : {
+              status: 'PENDING' as const,
+              rejectionReason: null,
+              correction: null,
+            };
+        const document = existing
+          ? await this.vehicleDocumentRepository.saveState(
+              {
+                id: existing.id,
+                expectedRevision: existing.revision,
+                documentNumber: number,
+                expiryDate: expiry,
+                status: state.status,
+                rejectionReason: state.rejectionReason,
+                correction: state.correction
+                  ? JSON.stringify(state.correction)
+                  : null,
+              },
+              client,
+            )
+          : await this.vehicleDocumentRepository.create(
+              {
+                vehicleId,
+                documentType: dto.document_type,
+                documentNumber: number,
+                expiryDate: expiry,
+                status: 'PENDING',
+              },
+              client,
+            );
+        return {
+          document: this.toVehicleDocumentResponse(document),
+          message:
+            'Document saved. Upload its private image using /media/documents/upload.',
+        };
+      },
+      true,
+    );
   }
 
   async submitForVerification(userId: string) {
-    return this.withEditable(userId, async (profile, client) => {
-      await this.assertComplete(profile.id, client);
-      const updated = await this.profileRepository.updateStatus(
+    const profile = await this.requireDriverProfile(userId);
+    return this.databaseService.withTransaction(async (client) => {
+      const locked = await this.profileRepository.lockById(profile.id, client);
+      if (!locked || locked.status === 'SUSPENDED')
+        throw DriverErrors.profileNotEditable();
+      const latest = await this.verificationRepository.findLatestByProfileId(
         profile.id,
-        'PENDING_VERIFICATION',
         client,
       );
+      const status = applicationStatus(locked, latest);
+      if (status === 'PENDING_VERIFICATION' && latest) {
+        return {
+          profile: toDriverProfileResponse(locked),
+          verification: {
+            ...latest,
+            submitted_at: latest.submitted_at.toISOString(),
+          },
+        };
+      }
+      if (!['DRAFT', 'REJECTED'].includes(status))
+        throw DriverErrors.profileNotEditable();
+      if (
+        status === 'REJECTED' &&
+        !latest?.correction_document_ids.length &&
+        !(
+          await this.vehicleRepository.listByProfileId(profile.id, client)
+        ).some(
+          (v) => !!v.details_rejection_reason || !!v.photos_rejection_reason,
+        )
+      )
+        throw new BadRequestException(
+          'Admin must select correction requirements before this application can be resubmitted',
+        );
+      const vehicles = await this.vehicleRepository.listByProfileId(
+        profile.id,
+        client,
+      );
+      if (vehicles.length !== 1)
+        throw new ConflictException(
+          'Exactly one vehicle is required; legacy records need admin resolution',
+        );
+      await this.assertComplete(profile.id, client);
+      for (const vehicle of vehicles) {
+        if (
+          vehicle.photos_review_status === 'REJECTED' &&
+          vehicle.photos_correction_completed
+        )
+          await this.vehicleRepository.reviewGroup(
+            vehicle.id,
+            'PHOTOS',
+            'PENDING',
+            null,
+            client,
+            true,
+          );
+      }
+      const updated =
+        locked.status === 'APPROVED'
+          ? locked
+          : await this.profileRepository.updateStatus(
+              profile.id,
+              'PENDING_VERIFICATION',
+              client,
+            );
       if (!updated) throw DriverErrors.profileNotFound();
       const verification = await this.verificationRepository.create(
         profile.id,
@@ -342,9 +624,7 @@ export class DriverOnboardingService {
       return {
         profile: toDriverProfileResponse(updated),
         verification: {
-          id: verification.id,
-          driver_profile_id: verification.driver_profile_id,
-          status: verification.status,
+          ...verification,
           submitted_at: verification.submitted_at.toISOString(),
         },
       };
@@ -365,13 +645,31 @@ export class DriverOnboardingService {
   private async withEditable<T>(
     userId: string,
     work: (profile: DriverProfileRow, client: PoolClient) => Promise<T>,
+    corrections = false,
   ) {
     const profile = await this.requireDriverProfile(userId);
     return this.databaseService.withTransaction(async (client) => {
       const locked = await this.profileRepository.lockById(profile.id, client);
       if (!locked) throw DriverErrors.profileNotFound();
-      if (!EDITABLE_DRIVER_PROFILE_STATUSES.includes(locked.status))
+      const status = applicationStatus(
+        locked,
+        await this.verificationRepository.findLatestByProfileId(
+          locked.id,
+          client,
+        ),
+      );
+      if (
+        locked.status === 'SUSPENDED' ||
+        (status !== 'DRAFT' && !(corrections && status === 'REJECTED'))
+      )
         throw DriverErrors.profileNotEditable();
+      if (
+        (await this.vehicleRepository.listByProfileId(locked.id, client))
+          .length > 1
+      )
+        throw new ConflictException(
+          'Multiple legacy vehicles require admin resolution',
+        );
       return work(locked, client);
     });
   }
@@ -385,13 +683,19 @@ export class DriverOnboardingService {
     rejection_reason: string | null;
     uploaded_at: Date;
     reviewed_at: Date | null;
+    revision: number;
+    correction: unknown;
+    expiry_date: Date | null;
   }) {
     return {
       id: document.id,
       driver_profile_id: document.driver_profile_id,
+      expiry_date: dateOnly(document.expiry_date),
       document_type: document.document_type,
       document_number: document.document_number,
       status: document.status,
+      revision: document.revision,
+      correction: parseCorrection(document.correction),
       rejection_reason: document.rejection_reason,
       uploaded_at: document.uploaded_at.toISOString(),
       reviewed_at: document.reviewed_at?.toISOString() ?? null,
@@ -424,22 +728,18 @@ export class DriverOnboardingService {
     };
   }
 
-  private toVehicleResponse(vehicle: {
-    id: string;
-    driver_profile_id: string;
-    vehicle_number: string;
-    vehicle_type: string | null;
-    make: string | null;
-    model: string | null;
-    color: string | null;
-    manufacturing_year: number | null;
-    is_active: boolean;
-    created_at: Date;
-    updated_at: Date;
-  }) {
+  private toVehicleResponse(
+    vehicle: NonNullable<Awaited<ReturnType<VehicleRepository['findById']>>>,
+  ) {
     return {
       id: vehicle.id,
       driver_profile_id: vehicle.driver_profile_id,
+      details_review_status: vehicle.details_review_status,
+      photos_review_status: vehicle.photos_review_status,
+      details_rejection_reason: vehicle.details_rejection_reason,
+      photos_rejection_reason: vehicle.photos_rejection_reason,
+      photos_correction_completed: vehicle.photos_correction_completed,
+      review_revision: vehicle.review_revision,
       vehicle_number: vehicle.vehicle_number,
       vehicle_type: vehicle.vehicle_type,
       make: vehicle.make,
@@ -462,14 +762,18 @@ export class DriverOnboardingService {
     rejection_reason: string | null;
     uploaded_at: Date;
     reviewed_at: Date | null;
+    revision: number;
+    correction: unknown;
   }) {
     return {
       id: document.id,
       vehicle_id: document.vehicle_id,
       document_type: document.document_type,
       document_number: document.document_number,
-      expiry_date: document.expiry_date?.toISOString().slice(0, 10) ?? null,
+      expiry_date: dateOnly(document.expiry_date),
       status: document.status,
+      revision: document.revision,
+      correction: parseCorrection(document.correction),
       rejection_reason: document.rejection_reason,
       uploaded_at: document.uploaded_at.toISOString(),
       reviewed_at: document.reviewed_at?.toISOString() ?? null,

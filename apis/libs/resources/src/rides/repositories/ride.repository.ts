@@ -6,9 +6,11 @@ import {
   cancelRide,
   createRide,
   getRideById,
+  getRideByBookingKey,
   getRideByIdForBooker,
   listRidesAdmin,
   listRidesByBooker,
+  countPassengerRides,
   updateRideStatus,
   type ICreateRideParams,
   type ride_status,
@@ -17,6 +19,17 @@ import {
 
 @Injectable()
 export class RideRepository extends BaseRepository {
+  async findByBookingKey(
+    bookedByUserId: string,
+    bookingKey: string,
+    client?: PoolClient,
+  ) {
+    const [row] = await getRideByBookingKey.run(
+      { bookedByUserId, bookingKey },
+      client ?? this.pool,
+    );
+    return row ?? null;
+  }
   async create(params: ICreateRideParams, client?: PoolClient) {
     const connection = client ?? this.pool;
     const [row] = await createRide.run(params, connection);
@@ -30,9 +43,16 @@ export class RideRepository extends BaseRepository {
     return row ?? null;
   }
 
-  async findByIdForBooker(id: string, bookedByUserId: string, client?: PoolClient) {
+  async findByIdForBooker(
+    id: string,
+    bookedByUserId: string,
+    client?: PoolClient,
+  ) {
     const connection = client ?? this.pool;
-    const [row] = await getRideByIdForBooker.run({ id, bookedByUserId }, connection);
+    const [row] = await getRideByIdForBooker.run(
+      { id, bookedByUserId },
+      connection,
+    );
     return row ?? null;
   }
 
@@ -42,9 +62,25 @@ export class RideRepository extends BaseRepository {
     limit: number,
     offset: number,
     client?: PoolClient,
+    view?: 'upcoming' | 'completed',
   ) {
-    const connection = client ?? this.pool;
-    return listRidesByBooker.run({ bookedByUserId, status, limit, offset }, connection);
+    return listRidesByBooker.run(
+      { bookedByUserId, status, limit, offset, view: view ?? null },
+      client ?? this.pool,
+    );
+  }
+
+  async countByBooker(
+    bookedByUserId: string,
+    status: ride_status | null,
+    view: 'upcoming' | 'completed' | undefined,
+    client: PoolClient,
+  ) {
+    const [row] = await countPassengerRides.run(
+      { bookedByUserId, status, view: view ?? null },
+      client,
+    );
+    return row!;
   }
 
   async listAdmin(
